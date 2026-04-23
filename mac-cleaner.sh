@@ -192,6 +192,31 @@ cleanup_brew() {
   run_cmd "brew autoremove"   brew autoremove
 }
 
+cleanup_npm_yarn_all_nvm() {
+  # Each nvm-installed Node ships its own npm (and optionally yarn) with
+  # potentially a different `cache` setting via per-version .npmrc.
+  # Invoke each version's binaries so custom cache paths also get purged.
+  local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+  local versions_dir="$nvm_dir/versions/node"
+  local vpath vname vbin yarn_v
+  for vpath in "$versions_dir"/*; do
+    [[ -d "$vpath" ]] || continue
+    vname="${vpath:t}"
+    vbin="$vpath/bin"
+    if [[ -x "$vbin/npm" ]]; then
+      run_cmd "($vname) npm cache clean --force" "$vbin/npm" cache clean --force
+    fi
+    if [[ -x "$vbin/yarn" ]]; then
+      yarn_v="$("$vbin/yarn" --version 2>/dev/null || echo 0)"
+      if [[ "${yarn_v%%.*}" == "1" ]]; then
+        run_cmd "($vname) yarn cache clean" "$vbin/yarn" cache clean
+      else
+        run_cmd "($vname) yarn cache clean --all" "$vbin/yarn" cache clean --all
+      fi
+    fi
+  done
+}
+
 # Wrappers that call run_category with the right sizing path.
 category_npm_cache() {
   run_category "npm cache" "npm package download & tarball cache" \
@@ -213,6 +238,52 @@ category_brew() {
   local p
   if have brew; then p="$(brew --cache 2>/dev/null || echo /tmp/does-not-exist)"; else p="-"; fi
   run_category "Homebrew" "old versions, downloads, autoremove unused" "$p" cleanup_brew
+}
+
+category_npm_yarn_all_nvm() {
+  local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+  local versions_dir="$nvm_dir/versions/node"
+  section "npm/yarn (all nvm Node versions)"
+  if [[ ! -d "$versions_dir" ]]; then
+    printf '  %snvm not found at %s, skipping%s\n' "$C_DIM" "$nvm_dir" "$C_RESET"
+    log SKIP "category=npm_yarn_all_nvm reason=nvm_not_installed"
+    return 0
+  fi
+  local count=0 vpath
+  for vpath in "$versions_dir"/*; do
+    [[ -d "$vpath" ]] && count=$(( count + 1 ))
+  done
+  if (( count == 0 )); then
+    printf '  %sno Node versions installed under nvm, skipping%s\n' "$C_DIM" "$C_RESET"
+    log SKIP "category=npm_yarn_all_nvm reason=no_versions"
+    return 0
+  fi
+  printf '  Found %d nvm Node version(s); invokes each bundled npm/yarn.\n' "$count"
+  printf '  Catches per-version .npmrc cache overrides the default categories miss.\n'
+
+  # Shared default cache paths — sized to report freed bytes. Per-version
+  # custom caches still get `cache clean`'d but are not summed here.
+  local npm_path="$HOME/.npm" yarn_path="$HOME/Library/Caches/Yarn"
+  local before=0
+  [[ -d "$npm_path" ]]  && before=$(( before + $(du_safe "$npm_path") ))
+  [[ -d "$yarn_path" ]] && before=$(( before + $(du_safe "$yarn_path") ))
+  printf '  Size (shared caches): %s%s%s\n' "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
+
+  if ! confirm "Clean across all $count nvm version(s)?"; then
+    log DECLINE "category=npm_yarn_all_nvm size_bytes=$before"
+    return 0
+  fi
+  cleanup_npm_yarn_all_nvm || { log ERROR "category=npm_yarn_all_nvm rc=$?"; return 0; }
+
+  local after=0
+  [[ -d "$npm_path" ]]  && after=$(( after + $(du_safe "$npm_path") ))
+  [[ -d "$yarn_path" ]] && after=$(( after + $(du_safe "$yarn_path") ))
+  local freed=$(( before - after ))
+  (( freed < 0 )) && freed=0
+  TOTAL_FREED=$(( TOTAL_FREED + freed ))
+  CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
+  printf '  %s→ swept %d version(s), freed %s%s\n' "$C_GREEN" "$count" "$(human_size "$freed")" "$C_RESET"
+  log CLEAN "category=npm_yarn_all_nvm freed_bytes=$freed versions=$count"
 }
 
 # ── cleanup functions: Xcode & iOS ───────────────────────
@@ -499,6 +570,7 @@ main() {
   fi
 
   # Order: smaller/safer first → bigger dev-tool wins → version audit last.
+  category_npm_yarn_all_nvm
   category_npm_cache
   category_yarn_cache
   category_pnpm_store
