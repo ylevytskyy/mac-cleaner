@@ -560,8 +560,15 @@ check_outdated_globals() {
 main() {
   log START "dry_run=$DRY_RUN yes=$ASSUME_YES"
 
-  printf '%smac-cleaner%s — run %s\n' "$C_BOLD" "$C_RESET" "$RUN_ID"
-  printf '  log: %s\n' "$LOG_FILE"
+  printf '%smac-cleaner%s — interactive macOS developer-cache cleaner   run %s\n' \
+    "$C_BOLD" "$C_RESET" "$RUN_ID"
+  printf '  %sHow it works:%s walks each cache, shows its size, asks y/N — %sy%s cleans, anything else skips.\n' \
+    "$C_BOLD" "$C_RESET" "$C_GREEN" "$C_RESET"
+  printf '  %sFlags:%s --dry-run (preview only) | --yes (auto-accept) | --help\n' \
+    "$C_BOLD" "$C_RESET"
+  printf '  %sLog:%s   %s\n' "$C_BOLD" "$C_RESET" "$LOG_FILE"
+  printf '  %sAbort:%s Ctrl-C at any prompt. Xcode Archives has a second DELETE confirm.\n' \
+    "$C_BOLD" "$C_RESET"
   if (( DRY_RUN )); then
     printf '  %s(dry-run: nothing will be deleted)%s\n' "$C_YELLOW" "$C_RESET"
   fi
