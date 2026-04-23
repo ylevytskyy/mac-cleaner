@@ -302,8 +302,28 @@ category_cocoapods() {
 # ── cleanup functions: JVM / Android / JS tooling / misc ─
 
 cleanup_gradle() {
+  # Gradle daemon & Kotlin LSP hold file locks in ~/.gradle/caches; rm -rf
+  # bails on the first locked file, leaving the cache half-deleted with the
+  # metadata journal out of sync with jars-9/transforms-*. That is the shape
+  # of "Android builds mysteriously fail after cleanup". Stop daemons first.
+  if have gradle; then
+    run_cmd "gradle --stop" gradle --stop || true
+  else
+    run_cmd "pkill -f GradleDaemon|KotlinCompileDaemon (best-effort)" \
+      zsh -c 'pkill -f "GradleDaemon|KotlinCompileDaemon" 2>/dev/null; true'
+  fi
+
+  local rc=0
   run_cmd "rm -rf ~/.gradle/caches" \
-    zsh -c 'rm -rf "$HOME/.gradle/caches"'
+    zsh -c 'rm -rf "$HOME/.gradle/caches"' || rc=$?
+
+  if (( rc != 0 )); then
+    printf '  %sWARNING:%s Gradle cache partially deleted — an IDE or daemon held file locks.\n' "$C_RED" "$C_RESET"
+    printf '           Android builds will fail until this completes. Close Android Studio,\n'
+    printf '           then re-run: %sgradle --stop && rm -rf ~/.gradle/caches%s\n' "$C_BOLD" "$C_RESET"
+    log WARN "category=gradle partial_delete=true"
+  fi
+  return $rc
 }
 
 cleanup_android_build() {
