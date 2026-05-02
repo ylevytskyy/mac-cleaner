@@ -8,6 +8,7 @@ setopt nullglob
 # ── globals ──────────────────────────────────────────────
 DRY_RUN=0
 ASSUME_YES=0
+PREPARE_PNPM=0
 LOG_FILE="${HOME}/.mac-cleaner.log"
 RUN_ID="$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 SCRIPT_NAME="${${ZSH_ARGZERO:-$0}:t}"
@@ -27,11 +28,12 @@ usage() {
 mac-cleaner — interactive macOS developer-cache cleaner
 
 Usage:
-  ${SCRIPT_NAME} [--dry-run] [--yes|-y] [--help|-h]
+  ${SCRIPT_NAME} [--dry-run] [--yes|-y] [--prepare-for-pnpm] [--help|-h]
 
 Flags:
   --dry-run   Show what would be deleted without deleting. Still prompts.
   --yes, -y   Skip y/N prompts (Xcode Archives still double-prompts).
+  --prepare-for-pnpm  Clean only npm/yarn caches across nvm + brew Node versions; skip everything else.
   --help, -h  This message.
 
 Log: ${LOG_FILE}
@@ -42,6 +44,7 @@ for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --yes|-y)  ASSUME_YES=1 ;;
+    --prepare-for-pnpm) PREPARE_PNPM=1 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown flag: $arg" >&2; usage; exit 2 ;;
   esac
@@ -284,6 +287,77 @@ category_npm_yarn_all_nvm() {
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
   printf '  %s→ swept %d version(s), freed %s%s\n' "$C_GREEN" "$count" "$(human_size "$freed")" "$C_RESET"
   log CLEAN "category=npm_yarn_all_nvm freed_bytes=$freed versions=$count"
+}
+
+cleanup_npm_yarn_all_brew() {
+  # Each brew-installed Node formula ships its own npm; corepack-shimmed yarn
+  # may also live under that prefix's bin. Per-formula .npmrc may set a custom
+  # cache path, so invoke each binary explicitly.
+  have brew || return 0
+  local formulas formula prefix vbin yarn_v
+  formulas="$(brew list --formula 2>/dev/null | grep -E '^node(@[0-9.]+)?$' || true)"
+  [[ -n "$formulas" ]] || return 0
+  while IFS= read -r formula; do
+    [[ -n "$formula" ]] || continue
+    prefix="$(brew --prefix "$formula" 2>/dev/null)"
+    [[ -n "$prefix" && -d "$prefix" ]] || continue
+    vbin="$prefix/bin"
+    if [[ -x "$vbin/npm" ]]; then
+      run_cmd "($formula) npm cache clean --force" "$vbin/npm" cache clean --force
+    fi
+    if [[ -x "$vbin/yarn" ]]; then
+      yarn_v="$("$vbin/yarn" --version 2>/dev/null || echo 0)"
+      if [[ "${yarn_v%%.*}" == "1" ]]; then
+        run_cmd "($formula) yarn cache clean" "$vbin/yarn" cache clean
+      else
+        run_cmd "($formula) yarn cache clean --all" "$vbin/yarn" cache clean --all
+      fi
+    fi
+  done <<< "$formulas"
+}
+
+category_npm_yarn_all_brew() {
+  section "npm/yarn (all brew Node formulas)"
+  if ! have brew; then
+    printf '  %sbrew not installed, skipping%s\n' "$C_DIM" "$C_RESET"
+    log SKIP "category=npm_yarn_all_brew reason=tool_not_installed"
+    return 0
+  fi
+  local formulas
+  formulas="$(brew list --formula 2>/dev/null | grep -E '^node(@[0-9.]+)?$' || true)"
+  if [[ -z "$formulas" ]]; then
+    printf '  %sno brew Node formulas installed, skipping%s\n' "$C_DIM" "$C_RESET"
+    log SKIP "category=npm_yarn_all_brew reason=no_versions"
+    return 0
+  fi
+  local count
+  count="$(printf '%s\n' "$formulas" | wc -l | tr -d ' ')"
+  printf '  Found %d brew Node formula(s); invokes each bundled npm/yarn.\n' "$count"
+  printf '  Catches per-formula .npmrc cache overrides the default categories miss.\n'
+
+  # Shared default cache paths — sized to report freed bytes. Per-formula
+  # custom caches still get `cache clean`'d but are not summed here.
+  local npm_path="$HOME/.npm" yarn_path="$HOME/Library/Caches/Yarn"
+  local before=0
+  [[ -d "$npm_path" ]]  && before=$(( before + $(du_safe "$npm_path") ))
+  [[ -d "$yarn_path" ]] && before=$(( before + $(du_safe "$yarn_path") ))
+  printf '  Size (shared caches): %s%s%s\n' "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
+
+  if ! confirm "Clean across all $count brew Node formula(s)?"; then
+    log DECLINE "category=npm_yarn_all_brew size_bytes=$before"
+    return 0
+  fi
+  cleanup_npm_yarn_all_brew || { log ERROR "category=npm_yarn_all_brew rc=$?"; return 0; }
+
+  local after=0
+  [[ -d "$npm_path" ]]  && after=$(( after + $(du_safe "$npm_path") ))
+  [[ -d "$yarn_path" ]] && after=$(( after + $(du_safe "$yarn_path") ))
+  local freed=$(( before - after ))
+  (( freed < 0 )) && freed=0
+  TOTAL_FREED=$(( TOTAL_FREED + freed ))
+  CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
+  printf '  %s→ swept %d formula(s), freed %s%s\n' "$C_GREEN" "$count" "$(human_size "$freed")" "$C_RESET"
+  log CLEAN "category=npm_yarn_all_brew freed_bytes=$freed formulas=$count"
 }
 
 # ── cleanup functions: Xcode & iOS ───────────────────────
@@ -558,13 +632,13 @@ check_outdated_globals() {
 }
 
 main() {
-  log START "dry_run=$DRY_RUN yes=$ASSUME_YES"
+  log START "dry_run=$DRY_RUN yes=$ASSUME_YES prepare_pnpm=$PREPARE_PNPM"
 
   printf '%smac-cleaner%s — interactive macOS developer-cache cleaner   run %s\n' \
     "$C_BOLD" "$C_RESET" "$RUN_ID"
   printf '  %sHow it works:%s walks each cache, shows its size, asks y/N — %sy%s cleans, anything else skips.\n' \
     "$C_BOLD" "$C_RESET" "$C_GREEN" "$C_RESET"
-  printf '  %sFlags:%s --dry-run (preview only) | --yes (auto-accept) | --help\n' \
+  printf '  %sFlags:%s --dry-run | --yes | --prepare-for-pnpm | --help\n' \
     "$C_BOLD" "$C_RESET"
   printf '  %sLog:%s   %s\n' "$C_BOLD" "$C_RESET" "$LOG_FILE"
   printf '  %sAbort:%s Ctrl-C at any prompt. Xcode Archives has a second DELETE confirm.\n' \
@@ -575,25 +649,31 @@ main() {
   if (( ASSUME_YES )); then
     printf '  %s(--yes: prompts auto-accepted; Xcode Archives still double-prompts)%s\n' "$C_YELLOW" "$C_RESET"
   fi
+  if (( PREPARE_PNPM )); then
+    printf '  %s(--prepare-for-pnpm: only npm/yarn caches across all Node versions will be touched)%s\n' "$C_YELLOW" "$C_RESET"
+  fi
 
   # Order: smaller/safer first → bigger dev-tool wins → version audit last.
   category_npm_yarn_all_nvm
+  category_npm_yarn_all_brew
   category_npm_cache
   category_yarn_cache
-  category_pnpm_store
-  category_brew
-  category_xcode_derived
-  category_xcode_archives
-  category_ios_sim
-  category_cocoapods
-  category_gradle
-  category_android_build
-  category_expo_metro
-  category_pip_cache
-  category_trash
+  if (( ! PREPARE_PNPM )); then
+    category_pnpm_store
+    category_brew
+    category_xcode_derived
+    category_xcode_archives
+    category_ios_sim
+    category_cocoapods
+    category_gradle
+    category_android_build
+    category_expo_metro
+    category_pip_cache
+    category_trash
 
-  check_tool_versions
-  check_outdated_globals
+    check_tool_versions
+    check_outdated_globals
+  fi
 
   printf '\n%s── Summary ────────────────────%s\n' "$C_BOLD" "$C_RESET"
   printf '  Freed %s%s%s across %d categories\n' \
