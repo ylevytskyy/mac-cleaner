@@ -52,6 +52,8 @@ Every run generates a 4-byte hex `RUN_ID`; every log line includes `run=<id>`. T
 These come from the spec's "Safety guarantees" section and must be preserved on any edit:
 
 1. **No dynamic path construction for `rm -rf`.** Every deletion target is either a hardcoded absolute path or the output of a trusted tool command (`brew cleanup`, `npm cache clean`, `xcrun simctl`). Never `rm -rf "$foo/$bar"` where either side is user-influenced.
+
+   **Single allowed exception — `category_app_caches` only** (documented in `docs/superpowers/specs/2026-05-07-app-cache-cleanup-design.md`, "Safety rule exception"): this category iterates immediate children of the hardcoded path `$HOME/Library/Caches`, checks every candidate against a hardcoded denylist (literal names + `com.apple.*` / `*.ShipIt` prefixes) before deletion, and uses the child's resolved absolute path as the `rm -rf` target. The constraints that bound the exception are: (a) parent path is hardcoded; (b) iteration is immediate children only — no `**` recursion; (c) every candidate is checked against a hardcoded denylist; (d) no user-supplied paths or env-derived paths beyond `$HOME`. Future categories **cannot** widen this exception.
 2. **Tool detection before invocation.** Use `have <cmd>`; if missing, log `SKIP reason=tool_not_installed` and return 0. Never let `command not found` reach the user.
 3. **Auto-skip empty caches.** When `du_safe` returns 0, print "already empty, skipping", log `SKIP reason=empty`, and do not prompt.
 4. **`--yes` does not bypass the Xcode Archives DELETE prompt.** Treat that double-prompt as load-bearing.

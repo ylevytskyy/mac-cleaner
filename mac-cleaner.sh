@@ -553,6 +553,332 @@ category_trash() {
   run_category "Trash" "~/.Trash" "$HOME/.Trash" cleanup_trash
 }
 
+# ── cleanup functions: app caches, temp, dev dotcaches ───
+
+# category_app_caches — iterates ~/Library/Caches immediate children,
+# applies literal-name denylist + prefix-pattern denylist, and special-cases
+# Google/ with an Android Studio running-process check.
+# This is the single allowed exception to the "no dynamic rm -rf" rule:
+#   - Parent is hardcoded ($HOME/Library/Caches)
+#   - Iteration is over immediate children only (no ** recursion)
+#   - Every candidate is checked against a hardcoded denylist first
+#   - The deletion target is the matched child's resolved absolute path
+category_app_caches() {
+  local CACHES_DIR="$HOME/Library/Caches"
+
+  # Literal names to deny (exact match on child basename)
+  local -a DENY_NAMES=(
+    askpermissiond
+    chrome_crashpad_handler
+    CloudKit
+    "com.anthropic.claudefordesktop"
+    "Docker Desktop"
+    docker-secrets-engine
+    eas-cli
+    FamilyCircle
+    familycircled
+    Firefox
+    GameKit
+    GeoServices
+    Homebrew
+    io.sentry
+    Mozilla
+    PassKit
+    pip
+    pnpm
+    SentryCrash
+    ssu
+    TemporaryItems
+    Trae
+    "Viber Media S.à r.l"
+    Yarn
+    com.microsoft.autoupdate.fba
+    com.raycast.macos
+    com.google.GoogleUpdater
+    com.plausiblelabs.crashreporter.data
+    com.github.CopilotForXcode
+  )
+
+  # Returns 0 (denied) if the child name matches a literal deny entry or a
+  # prefix pattern; returns 1 (allowed) otherwise.
+  # Special sentinel "Google" is NOT in this list — handled separately below.
+  _app_caches_is_denied() {
+    local name="$1"
+    # Literal match
+    local d
+    for d in "${DENY_NAMES[@]}"; do
+      [[ "$name" == "$d" ]] && return 0
+    done
+    # Prefix patterns: com.apple.* and *.ShipIt
+    [[ "$name" == com.apple.* ]] && return 0
+    [[ "$name" == *.ShipIt    ]] && return 0
+    return 1
+  }
+
+  # ── size: sum du_safe across allowed children (post-denylist) ──────────
+  # Glob qualifier (N/) restricts matches to directories only. Top-level files
+  # in ~/Library/Caches (profile pictures, INSTALLATION marker, etc.) are user
+  # content / app state, not caches — caches are always directories by Apple
+  # convention.
+  local total=0
+  local child name
+  for child in "$CACHES_DIR"/*(N/); do
+    name="${child:t}"
+    # Google/ is special-cased: always count its safe subfolders toward size
+    if [[ "$name" == "Google" ]]; then
+      local gsub
+      for gsub in "$child"/AndroidStudio*(N) "$child/Chrome"; do
+        [[ -e "$gsub" ]] && total=$(( total + $(du_safe "$gsub") ))
+      done
+      continue
+    fi
+    _app_caches_is_denied "$name" && continue
+    total=$(( total + $(du_safe "$child") ))
+  done
+
+  section "macOS app caches"
+  printf '  ~/Library/Caches — immediate children (denylist-filtered)\n'
+  printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+  if (( total == 0 )); then
+    printf '  %salready empty, skipping%s\n' "$C_DIM" "$C_RESET"
+    log SKIP "category=app_caches reason=empty"
+    return 0
+  fi
+
+  if ! confirm "Clean this?"; then
+    log DECLINE "category=app_caches size_bytes=$total"
+    return 0
+  fi
+
+  # ── cleanup ────────────────────────────────────────────────────────────
+  local before="$total"
+  for child in "$CACHES_DIR"/*(N/); do
+    name="${child:t}"
+
+    # Special case: Google/ — sub-iterate with Android Studio check
+    if [[ "$name" == "Google" ]]; then
+      # Check if Android Studio is running
+      if pgrep -f '/Applications/Android Studio.app' >/dev/null 2>&1; then
+        printf '  %sWARNING:%s Android Studio is running. Close it before clearing its caches; skipping Google/AndroidStudio*/\n' \
+          "$C_YELLOW" "$C_RESET"
+        log SKIP "category=app_caches reason=android_studio_running entry=Google/AndroidStudio*"
+      else
+        # Delete each AndroidStudio* child
+        local as_sub
+        for as_sub in "$child"/AndroidStudio*(N); do
+          [[ -e "$as_sub" ]] || continue
+          local as_name="${as_sub:t}"
+          run_cmd "rm -rf ~/Library/Caches/Google/$as_name" \
+            zsh -c "rm -rf ${(q)as_sub}"
+        done
+      fi
+      # Always attempt Google/Chrome (browser HTTP cache, no IDE-lock concern)
+      if [[ -e "$child/Chrome" ]]; then
+        run_cmd "rm -rf ~/Library/Caches/Google/Chrome" \
+          zsh -c "rm -rf ${(q)child}/Chrome"
+      fi
+      # Any other Google/ child defaults to DENY — do nothing
+      continue
+    fi
+
+    if _app_caches_is_denied "$name"; then
+      log SKIP "category=app_caches reason=denylist entry=$name"
+      continue
+    fi
+
+    run_cmd "rm -rf ~/Library/Caches/$name" \
+      zsh -c "rm -rf ${(q)child}"
+  done
+
+  # ── measure freed ─────────────────────────────────────────────────────
+  local after=0
+  for child in "$CACHES_DIR"/*(N/); do
+    name="${child:t}"
+    if [[ "$name" == "Google" ]]; then
+      local gsub2
+      for gsub2 in "$child"/AndroidStudio*(N) "$child/Chrome"; do
+        [[ -e "$gsub2" ]] && after=$(( after + $(du_safe "$gsub2") ))
+      done
+      continue
+    fi
+    _app_caches_is_denied "$name" && continue
+    after=$(( after + $(du_safe "$child") ))
+  done
+
+  local freed=$(( before - after ))
+  (( freed < 0 )) && freed=0
+  TOTAL_FREED=$(( TOTAL_FREED + freed ))
+  CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
+  printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
+  log CLEAN "category=app_caches freed_bytes=$freed"
+}
+
+cleanup_temp_parent() {
+  # cleanup_temp_parent <parent-dir>
+  # Deletes user-owned entries older than 7 days via find; never removes parent.
+  local parent="$1"
+  local me
+  me="$(id -un)"
+  run_cmd "find $parent -mindepth 1 -maxdepth 1 -user $me -mtime +7 -exec rm -rf {} +" \
+    zsh -c "find ${(q)parent} -mindepth 1 -maxdepth 1 -user ${(q)me} -mtime +7 -exec rm -rf {} +"
+}
+
+_temp_size_parent() {
+  # echo bytes of user-owned entries older than 7 days in parent dir
+  local parent="$1"
+  [[ -d "$parent" ]] || { echo 0; return; }
+  local me
+  me="$(id -un)"
+  local kb
+  kb="$(find "$parent" -mindepth 1 -maxdepth 1 -user "$me" -mtime +7 -print0 2>/dev/null \
+        | xargs -0 /usr/bin/du -sk 2>/dev/null \
+        | /usr/bin/awk '{s+=$1} END{print s+0}')"
+  echo "$(( ${kb:-0} * 1024 ))"
+}
+
+category_temp() {
+  local tmp_dir="/tmp"
+  local user_tmp="${TMPDIR%/}"
+  # Resolve /tmp -> /private/tmp on macOS for consistent comparison.
+  # readlink returns a relative path ("private/tmp") on macOS, so prepend / if needed.
+  if [[ -L "$tmp_dir" ]]; then
+    local resolved
+    resolved="$(readlink "$tmp_dir")"
+    [[ "$resolved" != /* ]] && resolved="/$resolved"
+    tmp_dir="$resolved"
+  fi
+
+  # Size: sum >7-day user-owned entries across both parents
+  local total=0 sz
+  sz="$(_temp_size_parent "$tmp_dir")"
+  total=$(( total + sz ))
+  if [[ -n "$user_tmp" && "$user_tmp" != "$tmp_dir" ]]; then
+    sz="$(_temp_size_parent "$user_tmp")"
+    total=$(( total + sz ))
+  fi
+
+  section "Temp directories"
+  printf '  /tmp and $TMPDIR — user-owned entries older than 7 days\n'
+  printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+  if (( total == 0 )); then
+    printf '  %salready empty, skipping%s\n' "$C_DIM" "$C_RESET"
+    log SKIP "category=temp reason=empty"
+    return 0
+  fi
+
+  if ! confirm "Clean this?"; then
+    log DECLINE "category=temp size_bytes=$total"
+    return 0
+  fi
+
+  local rc=0
+  cleanup_temp_parent "$tmp_dir" || rc=$?
+  if [[ -n "$user_tmp" && "$user_tmp" != "$tmp_dir" ]]; then
+    cleanup_temp_parent "$user_tmp" || rc=$?
+  fi
+
+  if (( rc != 0 )); then
+    printf '  %sERROR%s cleanup returned rc=%d (continuing)\n' "$C_RED" "$C_RESET" "$rc"
+    log ERROR "category=temp rc=$rc"
+    return 0
+  fi
+
+  local after=0
+  sz="$(_temp_size_parent "$tmp_dir")"
+  after=$(( after + sz ))
+  if [[ -n "$user_tmp" && "$user_tmp" != "$tmp_dir" ]]; then
+    sz="$(_temp_size_parent "$user_tmp")"
+    after=$(( after + sz ))
+  fi
+
+  local freed=$(( total - after ))
+  (( freed < 0 )) && freed=0
+  TOTAL_FREED=$(( TOTAL_FREED + freed ))
+  CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
+  printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
+  log CLEAN "category=temp freed_bytes=$freed"
+}
+
+category_dev_dotcaches() {
+  # Hardcoded list of known-safe cache subpaths under $HOME.
+  # Each entry is a full subpath; no globbing of $HOME.
+  local -a DEV_DOTCACHE_PATHS=(
+    "$HOME/.cache/uv"
+    "$HOME/.cache/puppeteer"
+    "$HOME/.cache/chrome-devtools-mcp"
+    "$HOME/.cache/node"
+    "$HOME/.cache/prisma"
+    "$HOME/.cache/mesa_shader_cache"
+    "$HOME/.cache/pkg"
+    "$HOME/.cache/vscode-ripgrep"
+    "$HOME/.cache/gitstatus"
+    "$HOME/.cache/tooling"
+    "$HOME/.cache/zed"
+    "$HOME/.cache/github-copilot"
+    "$HOME/.cache/phpactor"
+    "$HOME/.bun/install/cache"
+    "$HOME/.bundle/cache"
+    "$HOME/.gem/specs"
+    "$HOME/.gluestack/cache"
+    "$HOME/.javacpp/cache"
+    "$HOME/.lldb/module_cache"
+    "$HOME/.m2/repository"
+    "$HOME/.openjfx/cache"
+    "$HOME/.pub-cache/hosted"
+    "$HOME/.skiko"
+    "$HOME/.yarn/berry/cache"
+    "$HOME/.hawtjni"
+    "$HOME/.android/cache"
+    "$HOME/.expo/android-apk-cache"
+    "$HOME/.expo/ios-simulator-app-cache"
+    "$HOME/.net/Updates"
+  )
+
+  # Size: sum du_safe across all extant entries
+  local total=0 p
+  for p in "${DEV_DOTCACHE_PATHS[@]}"; do
+    [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
+  done
+
+  section "Dev dotfolder caches"
+  printf '  Hardcoded cache subpaths under ~/ (uv, puppeteer, bun, lldb, m2, pub, etc.)\n'
+  printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+  if (( total == 0 )); then
+    printf '  %salready empty, skipping%s\n' "$C_DIM" "$C_RESET"
+    log SKIP "category=dev_dotcaches reason=empty"
+    return 0
+  fi
+
+  if ! confirm "Clean this?"; then
+    log DECLINE "category=dev_dotcaches size_bytes=$total"
+    return 0
+  fi
+
+  local before="$total"
+  for p in "${DEV_DOTCACHE_PATHS[@]}"; do
+    if [[ ! -e "$p" ]]; then
+      # Strip $HOME prefix for a readable relative path in the log
+      local rel="${p#$HOME/}"
+      log SKIP "category=dev_dotcaches reason=missing entry=~/$rel"
+      continue
+    fi
+    local rel="${p#$HOME/}"
+    run_cmd "rm -rf ~/$rel" zsh -c "rm -rf ${(q)p}"
+  done
+
+  local after=0
+  for p in "${DEV_DOTCACHE_PATHS[@]}"; do
+    [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
+  done
+
+  local freed=$(( before - after ))
+  (( freed < 0 )) && freed=0
+  TOTAL_FREED=$(( TOTAL_FREED + freed ))
+  CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
+  printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
+  log CLEAN "category=dev_dotcaches freed_bytes=$freed"
+}
+
 # ── version audit ────────────────────────────────────────
 
 # Semver compare — echo -1/0/1 for a<b/a==b/a>b. Strips leading 'v'.
@@ -669,6 +995,13 @@ main() {
     category_android_build
     category_expo_metro
     category_pip_cache
+
+    # Generic app caches, temp dirs, and dev dotfolder caches.
+    # These run after all tool-specific categories to avoid double-deletion.
+    category_app_caches
+    category_temp
+    category_dev_dotcaches
+
     category_trash
 
     check_tool_versions
