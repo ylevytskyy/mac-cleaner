@@ -1326,13 +1326,24 @@ _browser_clean_chromium() {
     "DawnGraphiteCache"
     "DawnWebGPUCache"
   )
+  # Top-level (not per-profile) shader caches — Chromium gpu/graphite/skia.
+  local -a top_leaves=(
+    "GrShaderCache"
+    "GraphiteDawnCache"
+    "ShaderCache"
+  )
   local before=0 after=0 prof leaf target
-  # Compute size across (Default + Profile *) × leaves
+  # Compute size across (Default + Profile *) × per-profile leaves
   for prof in "$udir"/Default(N/) "$udir"/Profile\ *(N/); do
     for leaf in "${leaves[@]}"; do
       target="$prof/$leaf"
       [[ -e "$target" ]] && before=$(( before + $(du_safe "$target") ))
     done
+  done
+  # Add top-level shader cache sizes
+  for leaf in "${top_leaves[@]}"; do
+    target="$udir/$leaf"
+    [[ -e "$target" ]] && before=$(( before + $(du_safe "$target") ))
   done
   if (( before == 0 )); then
     log SKIP "category=browser_caches browser=$key reason=empty"
@@ -1351,11 +1362,20 @@ _browser_clean_chromium() {
       run_cmd "rm -rf <profile>/$leaf" zsh -c "rm -rf ${(q)target}"
     done
   done
+  for leaf in "${top_leaves[@]}"; do
+    target="$udir/$leaf"
+    [[ -e "$target" ]] || continue
+    run_cmd "rm -rf <browser>/$leaf" zsh -c "rm -rf ${(q)target}"
+  done
   for prof in "$udir"/Default(N/) "$udir"/Profile\ *(N/); do
     for leaf in "${leaves[@]}"; do
       target="$prof/$leaf"
       [[ -e "$target" ]] && after=$(( after + $(du_safe "$target") ))
     done
+  done
+  for leaf in "${top_leaves[@]}"; do
+    target="$udir/$leaf"
+    [[ -e "$target" ]] && after=$(( after + $(du_safe "$target") ))
   done
   local freed=$(( before - after ))
   (( freed < 0 )) && freed=0
