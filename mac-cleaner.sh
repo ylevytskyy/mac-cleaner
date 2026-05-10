@@ -1552,6 +1552,52 @@ category_intelligence_platform() {
     "$HOME/Library/IntelligencePlatform" cleanup_intelligence_platform
 }
 
+# ── Wallpaper aerials (G2, spec 2026-05-10-gaps) ──
+#
+# Two hardcoded subdirs under a hardcoded parent. Manifest is preserved
+# (the re-download index). User-photo wallpaper cache (Path C in the spec)
+# is permanently excluded — it contains user iPhone photos with EXIF.
+
+category_wallpaper_aerials() {
+  if pgrep -x ScreenSaverEngine >/dev/null 2>&1; then
+    section "Wallpaper aerials (videos + thumbnails)"
+    printf '  %sScreensaver is running, skipping (file handles in use).%s\n' \
+      "$C_YELLOW" "$C_RESET"
+    log SKIP "category=wallpaper_aerials reason=screensaver_running"
+    return 0
+  fi
+  local videos="$HOME/Library/Application Support/com.apple.wallpaper/aerials/videos"
+  local thumbs="$HOME/Library/Application Support/com.apple.wallpaper/aerials/thumbnails"
+  local total=0
+  [[ -e "$videos" ]] && total=$(( total + $(du_safe "$videos") ))
+  [[ -e "$thumbs" ]] && total=$(( total + $(du_safe "$thumbs") ))
+  section "Wallpaper aerials (videos + thumbnails)"
+  printf '  ~/Library/Application Support/com.apple.wallpaper/aerials/{videos,thumbnails}\n'
+  printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+  if (( total == 0 )); then
+    printf '  %salready empty, skipping%s\n' "$C_DIM" "$C_RESET"
+    log SKIP "category=wallpaper_aerials reason=empty"
+    return 0
+  fi
+  printf '  Re-downloads automatically on next screensaver activation (requires internet).\n'
+  printf '  Manifest index is preserved; only video and thumbnail files are removed.\n'
+  if ! confirm "Clean wallpaper aerials?"; then
+    log DECLINE "category=wallpaper_aerials size_bytes=$total"
+    return 0
+  fi
+  run_cmd "rm -rf <aerials>/videos" zsh -c "rm -rf ${(q)videos}"
+  run_cmd "rm -rf <aerials>/thumbnails" zsh -c "rm -rf ${(q)thumbs}"
+  local after=0
+  [[ -e "$videos" ]] && after=$(( after + $(du_safe "$videos") ))
+  [[ -e "$thumbs" ]] && after=$(( after + $(du_safe "$thumbs") ))
+  local freed=$(( total - after ))
+  (( freed < 0 )) && freed=0
+  TOTAL_FREED=$(( TOTAL_FREED + freed ))
+  CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
+  printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
+  log CLEAN "category=wallpaper_aerials freed_bytes=$freed"
+}
+
 # ── System-state additions (Tier 2) ──
 
 category_tm_local_snapshots() {
@@ -1778,6 +1824,7 @@ main() {
     category_mail_downloads
     category_diagnostic_reports
     category_intelligence_platform
+    category_wallpaper_aerials
 
     category_tm_local_snapshots
     category_macos_installers
