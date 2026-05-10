@@ -1537,6 +1537,21 @@ category_diagnostic_reports() {
   log CLEAN "category=diagnostic_reports freed_bytes=$freed"
 }
 
+# ── Apple Intelligence + on-device ML (G1, spec 2026-05-10-gaps) ──
+
+cleanup_intelligence_platform() {
+  run_cmd "pkill -x intelligenceplatformd (best-effort)" \
+    zsh -c 'pkill -x intelligenceplatformd 2>/dev/null; true'
+  run_cmd "rm -rf ~/Library/IntelligencePlatform/*" \
+    zsh -c 'rm -rf "$HOME/Library/IntelligencePlatform/"*'
+}
+
+category_intelligence_platform() {
+  run_category "Apple Intelligence platform cache" \
+    "knowledge graph + per-locale inference artifacts; daemon rebuilds within hours" \
+    "$HOME/Library/IntelligencePlatform" cleanup_intelligence_platform
+}
+
 # ── System-state additions (Tier 2) ──
 
 category_tm_local_snapshots() {
@@ -1762,6 +1777,7 @@ main() {
     category_apple_music_stream_cache
     category_mail_downloads
     category_diagnostic_reports
+    category_intelligence_platform
 
     category_tm_local_snapshots
     category_macos_installers
