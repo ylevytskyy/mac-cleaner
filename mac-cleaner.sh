@@ -975,13 +975,13 @@ category_xcode_dt_cache() {
 }
 
 cleanup_xcode_device_logs() {
-  run_cmd "rm -rf ~/Library/Developer/Xcode/iOS Device Logs/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/Xcode/iOS Device Logs/"*'
+  run_cmd "rm -rf ~/Library/Developer/Xcode/DeviceLogs/*" \
+    zsh -c 'rm -rf "$HOME/Library/Developer/Xcode/DeviceLogs/"*'
 }
 category_xcode_device_logs() {
   run_category "Xcode iOS device logs" \
     "historical crash logs from attached devices, re-collected on next attach" \
-    "$HOME/Library/Developer/Xcode/iOS Device Logs" cleanup_xcode_device_logs
+    "$HOME/Library/Developer/Xcode/DeviceLogs" cleanup_xcode_device_logs
 }
 
 # ── Language-toolchain additions ──
