@@ -10,7 +10,7 @@ No daemons, no config, no dependencies beyond the tools whose caches it cleans.
 |---|---|
 | npm cache | `~/.npm` (also swept across **every nvm-installed Node**, catching per-version `.npmrc` overrides) |
 | yarn cache | `~/Library/Caches/Yarn` (handles both classic v1 and modern Yarn) |
-| pnpm store | `~/Library/pnpm/store` or `~/.pnpm-store` |
+| pnpm store | `~/Library/pnpm/store` or `~/.pnpm-store` (also offers to remove the orphaned `~/Library/pnpm/store/v3` legacy store left by pnpm 5–8 if pnpm has migrated) |
 | Homebrew | `brew cleanup -s` + `brew autoremove` |
 | Xcode DerivedData | `~/Library/Developer/Xcode/DerivedData` |
 | Xcode Archives | `~/Library/Developer/Xcode/Archives` *(double-prompted: requires typing `DELETE`)* |
@@ -44,7 +44,7 @@ Targets the buckets macOS reports as **"System Data"** (System Settings → Gene
 | Composer cache | `composer clear-cache` |
 | Bazel cache | `bazel shutdown` then `/private/var/tmp/_bazel_$USER` and `~/Library/Caches/bazel` |
 | Container VMs | per-tool prune for Docker / OrbStack / Colima / Lima / Podman *(volumes preserved unless `--include-volumes`)* |
-| Browser caches | Safari, Chrome, Arc, Edge, Brave, Firefox — cache subdirs only; cookies/history/logins preserved *(skip if browser running)* |
+| Browser caches | Safari, Chrome, Arc, Edge, Brave, Firefox, Slack — cache subdirs only (Chromium top-level shader caches + Firefox `startupCache` included); cookies/history/logins preserved *(skip if browser/app running)* |
 | Apple Music stream cache | `~/Library/Caches/com.apple.Music` *(skip if Music running; does NOT contain downloaded songs)* |
 | Mail Downloads | `~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads` *(skip if Mail running)* |
 | Diagnostic reports | `~/Library/Logs/DiagnosticReports` + `/Library/Logs/DiagnosticReports` |
