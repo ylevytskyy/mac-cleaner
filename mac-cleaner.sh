@@ -1494,11 +1494,15 @@ category_mail_downloads() {
 }
 
 cleanup_diagnostic_reports() {
-  run_cmd "rm -f ~/Library/Logs/DiagnosticReports/*" \
-    zsh -c 'rm -f "$HOME/Library/Logs/DiagnosticReports/"*'
+  run_cmd "rm -rf ~/Library/Logs/DiagnosticReports/Retired" \
+    zsh -c 'rm -rf "$HOME/Library/Logs/DiagnosticReports/Retired"'
+  run_cmd "rm -f ~/Library/Logs/DiagnosticReports/*.ips ~/Library/Logs/DiagnosticReports/*.diag" \
+    zsh -c 'rm -f "$HOME/Library/Logs/DiagnosticReports/"*.ips "$HOME/Library/Logs/DiagnosticReports/"*.diag(N)'
   if id -Gn | tr ' ' '\n' | grep -qx _analyticsusers; then
-    run_cmd "rm -f /Library/Logs/DiagnosticReports/*" \
-      zsh -c 'rm -f /Library/Logs/DiagnosticReports/*'
+    run_cmd "rm -rf /Library/Logs/DiagnosticReports/Retired" \
+      zsh -c 'rm -rf /Library/Logs/DiagnosticReports/Retired'
+    run_cmd "rm -f /Library/Logs/DiagnosticReports/*.ips /Library/Logs/DiagnosticReports/*.diag" \
+      zsh -c 'rm -f /Library/Logs/DiagnosticReports/*.ips /Library/Logs/DiagnosticReports/*.diag(N)'
   else
     log SKIP "category=diagnostic_reports reason=insufficient_perms group=_analyticsusers path=/Library/Logs/DiagnosticReports"
   fi
