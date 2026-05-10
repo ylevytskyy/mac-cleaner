@@ -50,6 +50,9 @@ Targets the buckets macOS reports as **"System Data"** (System Settings → Gene
 | Diagnostic reports | `~/Library/Logs/DiagnosticReports` + `/Library/Logs/DiagnosticReports` |
 | Time Machine local snapshots | `tmutil thinlocalsnapshots / 999999999999 4` *(removes local 24h restore window; network/external TM unaffected)* |
 | Stale macOS installers | `/Applications/Install macOS *.app` *(per-installer prompt; 12-15 GB each)* |
+| Apple Intelligence platform cache | `~/Library/IntelligencePlatform/` — knowledge graph + per-locale inference artifacts; daemon rebuilds within hours; new in Tahoe 26.x |
+| Wallpaper aerials | `~/Library/Application Support/com.apple.wallpaper/aerials/{videos,thumbnails}` — aerial wallpaper videos and thumbnails; re-downloads on next screensaver activation; manifest preserved |
+| Android Studio + JetBrains IDE logs | `~/Library/Logs/{Google,JetBrains}` — multi-version log accumulation; each IDE recreates its log dir on next launch |
 
 After cleanup it also runs a **version audit** — checks `npm` / `yarn` / `pnpm` against the registry and lists outdated global npm packages, prompting before any update.
 
@@ -93,6 +96,24 @@ At the end you get a summary: total bytes freed and number of categories cleaned
 
 - macOS, zsh (default since Catalina).
 - The cleaner only touches caches for tools you have installed; missing tools are skipped silently.
+
+## What mac-cleaner cannot reclaim
+
+Some buckets show up in macOS Storage Settings as "System Data" but cannot be safely freed by an unprivileged tool. mac-cleaner deliberately does not touch them.
+
+**APFS purgeable space (~10–80 GB on heavy iCloud/Photos machines).** macOS marks iCloud-synced local copies and Photos derivatives as "purgeable." These appear in `diskutil info` `CapacityInUse` but not in `df` "used". macOS reclaims them automatically under storage pressure; no user CLI can force this without sudo.
+
+**System volume (~12–15 GB), Preboot (~9 GB), Recovery (~1–2 GB).** The sealed read-only OS partition and firmware support volumes. SIP-protected.
+
+**VM/swap (varies).** Root-owned swap files in `/System/Volumes/VM`. Only a reboot reduces them.
+
+**FileVault.** Adds no storage overhead — encryption is in-place at the block level.
+
+**APFS local snapshots.** Covered by the "Time Machine snapshots" category if you have TM configured. If not, no snapshots accumulate.
+
+**Apple Intelligence cryptex weights (~8–13 GB).** Live in SIP-sealed system cryptex volumes (`/System/Library/AssetsV2/com_apple_MobileAsset_UAF_FM_*`). Reclaim requires disabling Apple Intelligence in System Settings; mac-cleaner does not modify this.
+
+**Chrome's Gemini Nano AI weights (~4 GB).** Chrome silently downloads to `~/Library/Application Support/Google/Chrome/OptGuideOnDeviceModel/`. mac-cleaner does not touch this because deletion forces immediate re-download unless the Chrome setting is changed. To remove permanently: open Chrome → Settings → System → On-device AI → Off, then delete the directory once.
 
 ## Files
 
