@@ -1537,6 +1537,58 @@ category_diagnostic_reports() {
   log CLEAN "category=diagnostic_reports freed_bytes=$freed"
 }
 
+# ── IDE log accumulation (G3, spec 2026-05-10-gaps) ──
+#
+# Android Studio creates a per-version log dir under ~/Library/Logs/Google/
+# at every minor version and never prunes old ones. JetBrains companion
+# path is included for completeness (auto-cleanup-180-day policy can
+# fail when products are uninstalled before next-version upgrade).
+
+cleanup_android_studio_logs() {
+  run_cmd "rm -rf ~/Library/Logs/Google" \
+    zsh -c 'rm -rf "$HOME/Library/Logs/Google"'
+  run_cmd "rm -rf ~/Library/Logs/JetBrains" \
+    zsh -c 'rm -rf "$HOME/Library/Logs/JetBrains"'
+}
+
+category_android_studio_logs() {
+  if pgrep -f "Android Studio.app" >/dev/null 2>&1; then
+    section "Android Studio + JetBrains IDE logs"
+    printf '  %sAndroid Studio is running. Close it and re-run.%s\n' \
+      "$C_YELLOW" "$C_RESET"
+    log SKIP "category=android_studio_logs reason=app_running app=AndroidStudio"
+    return 0
+  fi
+  local total=0 p
+  for p in "$HOME/Library/Logs/Google" "$HOME/Library/Logs/JetBrains"; do
+    [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
+  done
+  section "Android Studio + JetBrains IDE logs"
+  printf '  ~/Library/Logs/Google + ~/Library/Logs/JetBrains (all IDE versions)\n'
+  printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+  if (( total == 0 )); then
+    printf '  %salready empty, skipping%s\n' "$C_DIM" "$C_RESET"
+    log SKIP "category=android_studio_logs reason=empty"
+    return 0
+  fi
+  printf '  Each IDE recreates its log dir on next launch.\n'
+  if ! confirm "Clean this?"; then
+    log DECLINE "category=android_studio_logs size_bytes=$total"
+    return 0
+  fi
+  cleanup_android_studio_logs || { log ERROR "category=android_studio_logs rc=$?"; return 0; }
+  local after=0
+  for p in "$HOME/Library/Logs/Google" "$HOME/Library/Logs/JetBrains"; do
+    [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
+  done
+  local freed=$(( total - after ))
+  (( freed < 0 )) && freed=0
+  TOTAL_FREED=$(( TOTAL_FREED + freed ))
+  CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
+  printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
+  log CLEAN "category=android_studio_logs freed_bytes=$freed"
+}
+
 # ── Apple Intelligence + on-device ML (G1, spec 2026-05-10-gaps) ──
 
 cleanup_intelligence_platform() {
@@ -1823,6 +1875,7 @@ main() {
     category_apple_music_stream_cache
     category_mail_downloads
     category_diagnostic_reports
+    category_android_studio_logs
     category_intelligence_platform
     category_wallpaper_aerials
 
