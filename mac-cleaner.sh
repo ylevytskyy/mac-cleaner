@@ -188,6 +188,29 @@ cleanup_yarn_cache() {
 }
 
 cleanup_pnpm_store() {
+  # v3 legacy store: pnpm 5-8 stored at ~/Library/pnpm/store/v3.
+  # pnpm 9+ migrated to v10/v11; v3 is permanently unreachable.
+  # Guard rail: if v3 dir exists and is NOT the active store, offer to delete it.
+  local v3="$HOME/Library/pnpm/store/v3"
+  if [[ -d "$v3" ]]; then
+    local active=""
+    if have pnpm; then
+      active="$(pnpm store path 2>/dev/null || true)"
+    fi
+    if [[ "$active" != "$v3" ]]; then
+      local v3_size; v3_size=$(du_safe "$v3")
+      if (( v3_size > 0 )); then
+        printf '  %spnpm legacy v3 store found (orphaned by pnpm 9+):%s %s\n' \
+          "$C_YELLOW" "$C_RESET" "$(human_size "$v3_size")"
+        if confirm "  Remove orphaned pnpm v3 store?"; then
+          run_cmd "rm -rf ~/Library/pnpm/store/v3" zsh -c "rm -rf ${(q)v3}"
+          log CLEAN "category=pnpm_store action=remove_v3_orphan freed_bytes=$v3_size"
+        else
+          log DECLINE "category=pnpm_store action=remove_v3_orphan size_bytes=$v3_size"
+        fi
+      fi
+    fi
+  fi
   have pnpm || { log SKIP "category=pnpm_store reason=tool_not_installed"; return 0; }
   run_cmd "pnpm store prune" pnpm store prune
 }
