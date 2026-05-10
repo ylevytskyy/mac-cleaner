@@ -21,15 +21,54 @@ No daemons, no config, no dependencies beyond the tools whose caches it cleans.
 | Expo / Metro | `~/.expo/cache`, `/tmp/metro-*`, `/tmp/haste-map-*`, `/tmp/react-*` |
 | pip cache | `pip3 cache purge` (or `pip cache purge`) |
 | Trash | `~/.Trash` |
+| App caches | `~/Library/Caches/*` immediate children, denylist-filtered (Apple system, sync state, login-bearing apps preserved) |
+| Temp dirs | `/tmp` and `$TMPDIR` — user-owned entries older than 7 days |
+| Dev dotcaches | hardcoded `~/.cache/uv`, `~/.bun/install/cache`, `~/.m2/repository`, etc. |
+
+### System Data categories
+
+Targets the buckets macOS reports as **"System Data"** (System Settings → General → Storage).
+
+| Category | Path / command |
+|---|---|
+| CoreSimulator caches | `~/Library/Developer/CoreSimulator/Caches` *(skip if Simulator running)* |
+| Xcode test/playground devices | `~/Library/Developer/{XCTestDevices,XCPGDevices}` *(skip if Xcode running)* |
+| Xcode app cache | `~/Library/Caches/com.apple.dt.Xcode` *(skip if Xcode running)* |
+| Xcode iOS device logs | `~/Library/Developer/Xcode/iOS Device Logs` |
+| SwiftPM cache | `swift package purge-cache` (fallback `~/Library/Caches/org.swift.swiftpm`) |
+| clangd index | `~/.cache/clangd` |
+| ccache | `ccache --clear` |
+| sccache | `sccache --stop-server` then `~/Library/Caches/Mozilla.sccache` |
+| Cargo registry | `~/.cargo/registry/{cache,src}` |
+| Go caches | `go clean -modcache && go clean -cache` |
+| Composer cache | `composer clear-cache` |
+| Bazel cache | `bazel shutdown` then `/private/var/tmp/_bazel_$USER` and `~/Library/Caches/bazel` |
+| Container VMs | per-tool prune for Docker / OrbStack / Colima / Lima / Podman *(volumes preserved unless `--include-volumes`)* |
+| Browser caches | Safari, Chrome, Arc, Edge, Brave, Firefox — cache subdirs only; cookies/history/logins preserved *(skip if browser running)* |
+| Apple Music stream cache | `~/Library/Caches/com.apple.Music` *(skip if Music running; does NOT contain downloaded songs)* |
+| Mail Downloads | `~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads` *(skip if Mail running)* |
+| Diagnostic reports | `~/Library/Logs/DiagnosticReports` + `/Library/Logs/DiagnosticReports` |
+| Time Machine local snapshots | `tmutil thinlocalsnapshots / 999999999999 4` *(removes local 24h restore window; network/external TM unaffected)* |
+| Stale macOS installers | `/Applications/Install macOS *.app` *(per-installer prompt; 12-15 GB each)* |
 
 After cleanup it also runs a **version audit** — checks `npm` / `yarn` / `pnpm` against the registry and lists outdated global npm packages, prompting before any update.
+
+### Manual-only buckets (intentionally NOT scripted)
+
+These are real System Data contributors but the safety/value tradeoff doesn't fit a cleanup script. The supported alternative is listed for each:
+
+- **iCloud Drive cache / "Optimize Mac Storage"** → System Settings → Apple Account → iCloud → Drive → Optimize Mac Storage. Risk of permanent loss of unsynced documents prevents scripting.
+- **Photos library derivatives / thumbnails** → quit Photos, then hold ⌥⌘ while opening Photos → Repair Library / Rebuild Thumbnails. Apple's supported rebuild path.
+- **Messages attachments / `chat.db`** → Messages → Settings → General → Keep Messages: 30 Days. Risk of irreversible loss if iCloud Messages is off.
+- **iOS device backups (`~/Library/Application Support/MobileSync/Backup`)** → Finder → connect device → Manage Backups. Uses Apple's index to identify each backup safely.
 
 ## Usage
 
 ```bash
-./mac-cleaner.sh                 # interactive run
-./mac-cleaner.sh --dry-run       # preview only — nothing is deleted
-./mac-cleaner.sh --yes           # auto-accept y/N prompts (Xcode Archives still double-prompts)
+./mac-cleaner.sh                  # interactive run
+./mac-cleaner.sh --dry-run        # preview only — nothing is deleted
+./mac-cleaner.sh --yes            # auto-accept y/N prompts (Xcode Archives still double-prompts)
+./mac-cleaner.sh --include-volumes # also prune Docker/Podman named volumes (DESTROYS DATA)
 ./mac-cleaner.sh --help
 ```
 
