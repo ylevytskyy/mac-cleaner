@@ -1426,10 +1426,13 @@ _browser_clean_firefox() {
     log SKIP "category=browser_caches browser=firefox reason=app_running"
     return 0
   fi
-  local before=0 after=0 prof target
+  local -a ff_leaves=("cache2" "startupCache")
+  local before=0 after=0 prof leaf target
   for prof in "$root"/*.default-release(N/) "$root"/*.default(N/) "$root"/*.dev-edition-default(N/); do
-    target="$prof/cache2"
-    [[ -e "$target" ]] && before=$(( before + $(du_safe "$target") ))
+    for leaf in "${ff_leaves[@]}"; do
+      target="$prof/$leaf"
+      [[ -e "$target" ]] && before=$(( before + $(du_safe "$target") ))
+    done
   done
   if (( before == 0 )); then
     log SKIP "category=browser_caches browser=firefox reason=empty"
@@ -1442,13 +1445,17 @@ _browser_clean_firefox() {
     return 0
   fi
   for prof in "$root"/*.default-release(N/) "$root"/*.default(N/) "$root"/*.dev-edition-default(N/); do
-    target="$prof/cache2"
-    [[ -e "$target" ]] || continue
-    run_cmd "rm -rf <profile>/cache2" zsh -c "rm -rf ${(q)target}"
+    for leaf in "${ff_leaves[@]}"; do
+      target="$prof/$leaf"
+      [[ -e "$target" ]] || continue
+      run_cmd "rm -rf <profile>/$leaf" zsh -c "rm -rf ${(q)target}"
+    done
   done
   for prof in "$root"/*.default-release(N/) "$root"/*.default(N/) "$root"/*.dev-edition-default(N/); do
-    target="$prof/cache2"
-    [[ -e "$target" ]] && after=$(( after + $(du_safe "$target") ))
+    for leaf in "${ff_leaves[@]}"; do
+      target="$prof/$leaf"
+      [[ -e "$target" ]] && after=$(( after + $(du_safe "$target") ))
+    done
   done
   local freed=$(( before - after ))
   (( freed < 0 )) && freed=0
