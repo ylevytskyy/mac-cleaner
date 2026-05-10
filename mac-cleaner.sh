@@ -1464,9 +1464,61 @@ _browser_clean_firefox() {
   log CLEAN "category=browser_caches browser=firefox freed_bytes=$freed"
 }
 
+# Slack 5.x stores Chromium-style caches under its sandbox container.
+# Same Chromium leaf list as the other browsers (single profile, no iteration).
+_browser_clean_slack() {
+  local base="$HOME/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack"
+  if [[ ! -d "$base" ]]; then
+    log SKIP "category=browser_caches browser=slack reason=tool_not_installed"
+    return 0
+  fi
+  if pgrep -f '/Applications/Slack.app' >/dev/null 2>&1; then
+    printf '  %sSlack is running, skipping its caches.%s\n' "$C_YELLOW" "$C_RESET"
+    log SKIP "category=browser_caches browser=slack reason=app_running"
+    return 0
+  fi
+  local -a leaves=(
+    "Cache"
+    "Code Cache"
+    "GPUCache"
+    "Service Worker"
+    "DawnGraphiteCache"
+    "DawnWebGPUCache"
+  )
+  local before=0 after=0 leaf target
+  for leaf in "${leaves[@]}"; do
+    target="$base/$leaf"
+    [[ -e "$target" ]] && before=$(( before + $(du_safe "$target") ))
+  done
+  if (( before == 0 )); then
+    log SKIP "category=browser_caches browser=slack reason=empty"
+    return 0
+  fi
+  printf '  %sSlack%s — size: %s%s%s\n' "$C_BOLD" "$C_RESET" \
+    "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
+  if ! confirm "Clean Slack caches?"; then
+    log DECLINE "category=browser_caches browser=slack size_bytes=$before"
+    return 0
+  fi
+  for leaf in "${leaves[@]}"; do
+    target="$base/$leaf"
+    [[ -e "$target" ]] || continue
+    run_cmd "rm -rf <slack>/$leaf" zsh -c "rm -rf ${(q)target}"
+  done
+  for leaf in "${leaves[@]}"; do
+    target="$base/$leaf"
+    [[ -e "$target" ]] && after=$(( after + $(du_safe "$target") ))
+  done
+  local freed=$(( before - after ))
+  (( freed < 0 )) && freed=0
+  TOTAL_FREED=$(( TOTAL_FREED + freed ))
+  printf '  %s→ Slack freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
+  log CLEAN "category=browser_caches browser=slack freed_bytes=$freed"
+}
+
 category_browser_caches() {
   section "Browser caches"
-  printf '  Safari, Chrome, Arc, Edge, Brave, Firefox — cache subdirs only.\n'
+  printf '  Safari, Chrome, Arc, Edge, Brave, Firefox, Slack — cache subdirs only.\n'
   printf '  Cookies, history, logins, and site storage are NOT touched.\n'
   local before_cleaned=$CATEGORIES_CLEANED
   local before_freed=$TOTAL_FREED
@@ -1480,6 +1532,7 @@ category_browser_caches() {
   _browser_clean_chromium brave '/Applications/Brave Browser.app' \
     "$HOME/Library/Application Support/BraveSoftware/Brave-Browser"
   _browser_clean_firefox
+  _browser_clean_slack
   # Count this category as cleaned if any sub-browser produced freed bytes.
   if (( TOTAL_FREED > before_freed )); then
     CATEGORIES_CLEANED=$(( before_cleaned + 1 ))
