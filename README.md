@@ -44,7 +44,7 @@ Targets the buckets macOS reports as **"System Data"** (System Settings → Gene
 | Composer cache | `composer clear-cache` |
 | Bazel cache | `bazel shutdown` then `/private/var/tmp/_bazel_$USER` and `~/Library/Caches/bazel` |
 | Container VMs | per-tool prune for Docker / OrbStack / Colima / Lima / Podman *(volumes preserved unless `--include-volumes`)* |
-| Browser caches | Safari, Chrome, Arc, Edge, Brave, Firefox, Slack — cache subdirs only (Chromium top-level shader caches + Firefox `startupCache` included); cookies/history/logins preserved *(skip if browser/app running)* |
+| Browser & Electron-app caches | Safari, Chrome, Arc, Edge, Brave, Firefox, Slack, **VS Code, VS Code Insiders, Cursor, Windsurf, Discord, Microsoft Teams, Notion** — cache subdirs only (Chromium top-level shader caches + Firefox `startupCache` included); cookies/history/logins/IndexedDB preserved *(skip if browser/app running)* |
 | Apple Music stream cache | `~/Library/Caches/com.apple.Music` *(skip if Music running; does NOT contain downloaded songs)* |
 | Mail Downloads | `~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads` *(skip if Mail running)* |
 | Diagnostic reports | `~/Library/Logs/DiagnosticReports` + `/Library/Logs/DiagnosticReports` |

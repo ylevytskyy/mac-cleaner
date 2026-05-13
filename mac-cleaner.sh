@@ -1487,6 +1487,61 @@ _browser_clean_firefox() {
   log CLEAN "category=browser_caches browser=firefox freed_bytes=$freed"
 }
 
+# Generic Chromium-class desktop-app cache cleaner.
+# Used by VS Code, Cursor, Discord, etc. — apps that bundle Electron and use
+# the same Chromium cache leaf names under a single per-app base directory.
+# Same exception shape as the Slack handler: hardcoded base × hardcoded leaves.
+_browser_clean_electron() {
+  local slug="$1" display="$2" pgrep_pat="$3" base="$4"
+  if [[ ! -d "$base" ]]; then
+    log SKIP "category=browser_caches browser=$slug reason=tool_not_installed"
+    return 0
+  fi
+  if pgrep -f "$pgrep_pat" >/dev/null 2>&1; then
+    printf '  %s%s is running, skipping its caches.%s\n' "$C_YELLOW" "$display" "$C_RESET"
+    log SKIP "category=browser_caches browser=$slug reason=app_running"
+    return 0
+  fi
+  local -a leaves=(
+    "Cache"
+    "Code Cache"
+    "GPUCache"
+    "Service Worker"
+    "DawnGraphiteCache"
+    "DawnWebGPUCache"
+    "CachedData"
+  )
+  local before=0 after=0 leaf target
+  for leaf in "${leaves[@]}"; do
+    target="$base/$leaf"
+    [[ -e "$target" ]] && before=$(( before + $(du_safe "$target") ))
+  done
+  if (( before == 0 )); then
+    log SKIP "category=browser_caches browser=$slug reason=empty"
+    return 0
+  fi
+  printf '  %s%s%s — size: %s%s%s\n' "$C_BOLD" "$display" "$C_RESET" \
+    "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
+  if ! confirm "Clean $display caches?"; then
+    log DECLINE "category=browser_caches browser=$slug size_bytes=$before"
+    return 0
+  fi
+  for leaf in "${leaves[@]}"; do
+    target="$base/$leaf"
+    [[ -e "$target" ]] || continue
+    run_cmd "rm -rf <$slug>/$leaf" zsh -c "rm -rf ${(q)target}"
+  done
+  for leaf in "${leaves[@]}"; do
+    target="$base/$leaf"
+    [[ -e "$target" ]] && after=$(( after + $(du_safe "$target") ))
+  done
+  local freed=$(( before - after ))
+  (( freed < 0 )) && freed=0
+  TOTAL_FREED=$(( TOTAL_FREED + freed ))
+  printf '  %s→ %s freed %s%s\n' "$C_GREEN" "$display" "$(human_size "$freed")" "$C_RESET"
+  log CLEAN "category=browser_caches browser=$slug freed_bytes=$freed"
+}
+
 # Slack 5.x stores Chromium-style caches under its sandbox container.
 # Same Chromium leaf list as the other browsers (single profile, no iteration).
 _browser_clean_slack() {
@@ -1540,9 +1595,10 @@ _browser_clean_slack() {
 }
 
 category_browser_caches() {
-  section "Browser caches"
-  printf '  Safari, Chrome, Arc, Edge, Brave, Firefox, Slack — cache subdirs only.\n'
-  printf '  Cookies, history, logins, and site storage are NOT touched.\n'
+  section "Browser & Electron-app caches"
+  printf '  Safari, Chrome, Arc, Edge, Brave, Firefox, Slack,\n'
+  printf '  VS Code, VS Code Insiders, Cursor, Windsurf, Discord, Teams, Notion — cache subdirs only.\n'
+  printf '  Cookies, history, logins, IndexedDB, and user data are NOT touched.\n'
   local before_cleaned=$CATEGORIES_CLEANED
   local before_freed=$TOTAL_FREED
   _browser_clean_safari
@@ -1556,6 +1612,27 @@ category_browser_caches() {
     "$HOME/Library/Application Support/BraveSoftware/Brave-Browser"
   _browser_clean_firefox
   _browser_clean_slack
+  _browser_clean_electron vscode "VS Code" \
+    '/Applications/Visual Studio Code.app' \
+    "$HOME/Library/Application Support/Code"
+  _browser_clean_electron vscode_insiders "VS Code Insiders" \
+    '/Applications/Visual Studio Code - Insiders.app' \
+    "$HOME/Library/Application Support/Code - Insiders"
+  _browser_clean_electron cursor "Cursor" \
+    '/Applications/Cursor.app' \
+    "$HOME/Library/Application Support/Cursor"
+  _browser_clean_electron windsurf "Windsurf" \
+    '/Applications/Windsurf.app' \
+    "$HOME/Library/Application Support/Windsurf"
+  _browser_clean_electron discord "Discord" \
+    '/Applications/Discord.app' \
+    "$HOME/Library/Application Support/discord"
+  _browser_clean_electron teams "Microsoft Teams" \
+    '/Applications/Microsoft Teams.app' \
+    "$HOME/Library/Application Support/Microsoft/Teams"
+  _browser_clean_electron notion "Notion" \
+    '/Applications/Notion.app' \
+    "$HOME/Library/Application Support/Notion"
   # Count this category as cleaned if any sub-browser produced freed bytes.
   if (( TOTAL_FREED > before_freed )); then
     CATEGORIES_CLEANED=$(( before_cleaned + 1 ))
