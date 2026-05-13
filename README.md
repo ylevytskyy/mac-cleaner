@@ -20,10 +20,13 @@ No daemons, no config, no dependencies beyond the tools whose caches it cleans.
 | Android build cache | `~/.android/build-cache` |
 | Expo / Metro | `~/.expo/cache`, `/tmp/metro-*`, `/tmp/haste-map-*`, `/tmp/react-*` |
 | pip cache | `pip3 cache purge` (or `pip cache purge`) |
+| Python toolchain extras | `~/.cache/pre-commit`, `~/Library/Caches/pypoetry`, `~/.cache/pypoetry`, `~/Library/Caches/pip` |
+| Node toolchain extras | `~/Library/Caches/node-gyp`, `~/.npm/_logs` |
 | Trash | `~/.Trash` |
 | App caches | `~/Library/Caches/*` immediate children, denylist-filtered (Apple system, sync state, login-bearing apps preserved) |
 | Temp dirs | `/tmp` and `$TMPDIR` — user-owned entries older than 7 days |
 | Dev dotcaches | hardcoded `~/.cache/uv`, `~/.bun/install/cache`, `~/.m2/repository`, etc. |
+| JetBrains IDE caches | `~/Library/Caches/JetBrains` — IntelliJ, WebStorm, PyCharm, GoLand, RubyMine, etc.; re-indexed on next IDE launch |
 
 ### System Data categories
 
@@ -47,7 +50,9 @@ Targets the buckets macOS reports as **"System Data"** (System Settings → Gene
 | Browser & Electron-app caches | Safari, Chrome, Arc, Edge, Brave, Firefox, Slack, **VS Code, VS Code Insiders, Cursor, Windsurf, Discord, Microsoft Teams, Notion** — cache subdirs only (Chromium top-level shader caches + Firefox `startupCache` included); cookies/history/logins/IndexedDB preserved *(skip if browser/app running)* |
 | Apple Music stream cache | `~/Library/Caches/com.apple.Music` *(skip if Music running; does NOT contain downloaded songs)* |
 | Mail Downloads | `~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads` *(skip if Mail running)* |
+| Apple Maps tile cache | `~/Library/Containers/com.apple.Maps/Data/Library/Caches/com.apple.Maps/MapTiles` — refetched on next view |
 | Diagnostic reports | `~/Library/Logs/DiagnosticReports` + `/Library/Logs/DiagnosticReports` |
+| macOS Software Update cache (per-user) | `~/Library/Caches/com.apple.SoftwareUpdate` — leftover update download bundles |
 | Time Machine local snapshots | `tmutil thinlocalsnapshots / 999999999999 4` *(removes local 24h restore window; network/external TM unaffected)* |
 | **AI / LLM model caches** | Ollama (`~/.ollama/models`), Hugging Face (`~/.cache/huggingface/{hub,datasets,transformers}`), PyTorch (`~/.cache/torch/{hub,kernels}`), Whisper, LM Studio, GPT4All, Pinokio cache — model blobs only; can be the single biggest reclaim category on AI-experimenting machines |
 | Stale macOS installers | `/Applications/Install macOS *.app` *(per-installer prompt; 12-15 GB each)* |

@@ -611,11 +611,14 @@ category_app_caches() {
     GeoServices
     Homebrew
     io.sentry
+    JetBrains
     Mozilla
+    node-gyp
     org.swift.swiftpm
     PassKit
     pip
     pnpm
+    pypoetry
     SentryCrash
     ssu
     TemporaryItems
@@ -1872,6 +1875,120 @@ category_tm_local_snapshots() {
   log CLEAN "category=tm_local_snapshots freed_bytes=$freed"
 }
 
+# ── LLM and additional app caches (spec 2026-05-13) ──
+
+cleanup_jetbrains_caches() {
+  run_cmd "rm -rf ~/Library/Caches/JetBrains" \
+    zsh -c 'rm -rf "$HOME/Library/Caches/JetBrains"'
+}
+
+category_jetbrains_caches() {
+  run_category "JetBrains IDE caches" \
+    "~/Library/Caches/JetBrains — IntelliJ, WebStorm, PyCharm, GoLand, RubyMine, etc. (re-indexed on next IDE launch)" \
+    "$HOME/Library/Caches/JetBrains" cleanup_jetbrains_caches
+}
+
+cleanup_macos_software_update() {
+  run_cmd "rm -rf ~/Library/Caches/com.apple.SoftwareUpdate/*" \
+    zsh -c 'rm -rf "$HOME/Library/Caches/com.apple.SoftwareUpdate/"*'
+}
+
+category_macos_software_update() {
+  run_category "macOS Software Update cache (per-user)" \
+    "~/Library/Caches/com.apple.SoftwareUpdate — leftover update download bundles" \
+    "$HOME/Library/Caches/com.apple.SoftwareUpdate" cleanup_macos_software_update
+}
+
+cleanup_apple_maps_tiles() {
+  local p="$HOME/Library/Containers/com.apple.Maps/Data/Library/Caches/com.apple.Maps/MapTiles"
+  run_cmd "rm -rf <Maps>/MapTiles/*" zsh -c "rm -rf ${(q)p}/*"
+}
+
+category_apple_maps_tiles() {
+  local p="$HOME/Library/Containers/com.apple.Maps/Data/Library/Caches/com.apple.Maps/MapTiles"
+  run_category "Apple Maps tile cache" \
+    "~/Library/Containers/com.apple.Maps/.../MapTiles — refetched on next view" \
+    "$p" cleanup_apple_maps_tiles
+}
+
+category_python_extras() {
+  local -a PATHS=(
+    "$HOME/.cache/pre-commit"
+    "$HOME/Library/Caches/pypoetry"
+    "$HOME/.cache/pypoetry"
+    "$HOME/Library/Caches/pip"
+  )
+  local total=0 p sz rel
+  for p in "${PATHS[@]}"; do
+    [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
+  done
+  section "Python toolchain extras"
+  printf '  pre-commit hook venvs, Poetry, pip (XDG path)\n'
+  printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+  if (( total == 0 )); then
+    printf '  %salready empty, skipping%s\n' "$C_DIM" "$C_RESET"
+    log SKIP "category=python_extras reason=empty"
+    return 0
+  fi
+  if ! confirm "Clean this?"; then
+    log DECLINE "category=python_extras size_bytes=$total"
+    return 0
+  fi
+  for p in "${PATHS[@]}"; do
+    [[ -e "$p" ]] || continue
+    rel="${p/#$HOME/~}"
+    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}"
+  done
+  local after=0
+  for p in "${PATHS[@]}"; do
+    [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
+  done
+  local freed=$(( total - after ))
+  (( freed < 0 )) && freed=0
+  TOTAL_FREED=$(( TOTAL_FREED + freed ))
+  CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
+  printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
+  log CLEAN "category=python_extras freed_bytes=$freed"
+}
+
+category_node_extras() {
+  local -a PATHS=(
+    "$HOME/Library/Caches/node-gyp"
+    "$HOME/.npm/_logs"
+  )
+  local total=0 p rel
+  for p in "${PATHS[@]}"; do
+    [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
+  done
+  section "Node toolchain extras"
+  printf '  ~/Library/Caches/node-gyp, ~/.npm/_logs\n'
+  printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+  if (( total == 0 )); then
+    printf '  %salready empty, skipping%s\n' "$C_DIM" "$C_RESET"
+    log SKIP "category=node_extras reason=empty"
+    return 0
+  fi
+  if ! confirm "Clean this?"; then
+    log DECLINE "category=node_extras size_bytes=$total"
+    return 0
+  fi
+  for p in "${PATHS[@]}"; do
+    [[ -e "$p" ]] || continue
+    rel="${p/#$HOME/~}"
+    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}"
+  done
+  local after=0
+  for p in "${PATHS[@]}"; do
+    [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
+  done
+  local freed=$(( total - after ))
+  (( freed < 0 )) && freed=0
+  TOTAL_FREED=$(( TOTAL_FREED + freed ))
+  CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
+  printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
+  log CLEAN "category=node_extras freed_bytes=$freed"
+}
+
 # AI / LLM model caches. Largest single category by reclaim potential.
 # All paths hardcoded. Pinokio scope: cache only — never api/ (installed apps)
 # or drive/ (venv disk image). Ollama daemon hint is informational only.
@@ -2095,12 +2212,15 @@ main() {
     category_android_build
     category_expo_metro
     category_pip_cache
+    category_python_extras
+    category_node_extras
 
     # Generic app caches, temp dirs, and dev dotfolder caches.
     # These run after all tool-specific categories to avoid double-deletion.
     category_app_caches
     category_temp
     category_dev_dotcaches
+    category_jetbrains_caches
 
     # ── System Data categories (spec 2026-05-10) ──
     # Familiar wins above; novel-judgment categories below.
@@ -2123,11 +2243,13 @@ main() {
 
     category_apple_music_stream_cache
     category_mail_downloads
+    category_apple_maps_tiles
     category_diagnostic_reports
     category_android_studio_logs
     category_intelligence_platform
     category_wallpaper_aerials
 
+    category_macos_software_update
     category_tm_local_snapshots
     category_llm_caches
     category_macos_installers
