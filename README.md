@@ -49,6 +49,7 @@ Targets the buckets macOS reports as **"System Data"** (System Settings → Gene
 | Mail Downloads | `~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads` *(skip if Mail running)* |
 | Diagnostic reports | `~/Library/Logs/DiagnosticReports` + `/Library/Logs/DiagnosticReports` |
 | Time Machine local snapshots | `tmutil thinlocalsnapshots / 999999999999 4` *(removes local 24h restore window; network/external TM unaffected)* |
+| **AI / LLM model caches** | Ollama (`~/.ollama/models`), Hugging Face (`~/.cache/huggingface/{hub,datasets,transformers}`), PyTorch (`~/.cache/torch/{hub,kernels}`), Whisper, LM Studio, GPT4All, Pinokio cache — model blobs only; can be the single biggest reclaim category on AI-experimenting machines |
 | Stale macOS installers | `/Applications/Install macOS *.app` *(per-installer prompt; 12-15 GB each)* |
 | Apple Intelligence platform cache | `~/Library/IntelligencePlatform/` — knowledge graph + per-locale inference artifacts; daemon rebuilds within hours; new in Tahoe 26.x |
 | Wallpaper aerials | `~/Library/Application Support/com.apple.wallpaper/aerials/{videos,thumbnails}` — aerial wallpaper videos and thumbnails; re-downloads on next screensaver activation; manifest preserved |

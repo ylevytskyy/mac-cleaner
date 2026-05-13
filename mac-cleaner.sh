@@ -1872,6 +1872,75 @@ category_tm_local_snapshots() {
   log CLEAN "category=tm_local_snapshots freed_bytes=$freed"
 }
 
+# AI / LLM model caches. Largest single category by reclaim potential.
+# All paths hardcoded. Pinokio scope: cache only — never api/ (installed apps)
+# or drive/ (venv disk image). Ollama daemon hint is informational only.
+category_llm_caches() {
+  local -a LLM_PATHS=(
+    "$HOME/.ollama/models"
+    "$HOME/.cache/huggingface/hub"
+    "$HOME/.cache/huggingface/datasets"
+    "$HOME/.cache/huggingface/transformers"
+    "$HOME/.cache/torch/hub"
+    "$HOME/.cache/torch/kernels"
+    "$HOME/.cache/whisper"
+    "$HOME/.lmstudio/models"
+    "$HOME/Library/Application Support/nomic.ai/GPT4All"
+    "$HOME/pinokio/cache"
+  )
+  local total=0 p sz rel
+  for p in "${LLM_PATHS[@]}"; do
+    [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
+  done
+
+  section "AI / LLM model caches"
+  printf '  Ollama, Hugging Face, PyTorch hub, Whisper, LM Studio, GPT4All, Pinokio cache\n'
+  printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+  if (( total == 0 )); then
+    printf '  %salready empty, skipping%s\n' "$C_DIM" "$C_RESET"
+    log SKIP "category=llm_caches reason=empty"
+    return 0
+  fi
+
+  # Per-leaf size breakdown — these can be huge; users want to see which.
+  for p in "${LLM_PATHS[@]}"; do
+    [[ -e "$p" ]] || continue
+    sz=$(du_safe "$p")
+    (( sz == 0 )) && continue
+    rel="${p/#$HOME/~}"
+    printf '    %s%-58s%s %s%s%s\n' "$C_DIM" "$rel" "$C_RESET" \
+      "$C_DIM" "$(human_size "$sz")" "$C_RESET"
+  done
+
+  # Ollama daemon hint — informational, no auto-stop (GUI-app posture).
+  if [[ -e "$HOME/.ollama/models" ]] && pgrep -x ollama >/dev/null 2>&1; then
+    printf '  %sNote:%s Ollama daemon is running. Quit Ollama.app or run %slaunchctl stop com.ollama.Ollama%s for a clean delete.\n' \
+      "$C_YELLOW" "$C_RESET" "$C_BOLD" "$C_RESET"
+  fi
+
+  if ! confirm "Clean these LLM caches?"; then
+    log DECLINE "category=llm_caches size_bytes=$total"
+    return 0
+  fi
+
+  for p in "${LLM_PATHS[@]}"; do
+    [[ -e "$p" ]] || continue
+    rel="${p/#$HOME/~}"
+    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}"
+  done
+
+  local after=0
+  for p in "${LLM_PATHS[@]}"; do
+    [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
+  done
+  local freed=$(( total - after ))
+  (( freed < 0 )) && freed=0
+  TOTAL_FREED=$(( TOTAL_FREED + freed ))
+  CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
+  printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
+  log CLEAN "category=llm_caches freed_bytes=$freed"
+}
+
 category_macos_installers() {
   section "Stale macOS installers"
   printf '  /Applications/Install macOS *.app — 12-15 GB stub installers\n'
@@ -2060,6 +2129,7 @@ main() {
     category_wallpaper_aerials
 
     category_tm_local_snapshots
+    category_llm_caches
     category_macos_installers
 
     category_trash
