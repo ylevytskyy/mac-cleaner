@@ -168,6 +168,47 @@ run_category() {
   log CLEAN "category=$name freed_bytes=$freed"
 }
 
+# multi-path variant of run_category: sum size across several HARDCODED paths,
+# prompt once, rm each, measure. Same size/prompt/measure contract as
+# run_category; mirrors the existing dev_dotcaches/python_extras bodies.
+# Every path must be a literal/hardcoded absolute path (safety rule 1).
+# Usage: run_paths_category <name> <log_cat> <desc> <path>...
+run_paths_category() {
+  local name="$1" logcat="$2" desc="$3"; shift 3
+  local -a paths=("$@")
+  local total=0 p rel
+  for p in "${paths[@]}"; do
+    [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
+  done
+  section "$name"
+  printf '  %s\n' "$desc"
+  printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+  if (( total == 0 )); then
+    printf '  %salready empty, skipping%s\n' "$C_DIM" "$C_RESET"
+    log SKIP "category=$logcat reason=empty"
+    return 0
+  fi
+  if ! confirm "Clean this?"; then
+    log DECLINE "category=$logcat size_bytes=$total"
+    return 0
+  fi
+  for p in "${paths[@]}"; do
+    [[ -e "$p" ]] || continue
+    rel="${p/#$HOME/~}"
+    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}"
+  done
+  local after=0
+  for p in "${paths[@]}"; do
+    [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
+  done
+  local freed=$(( total - after ))
+  (( freed < 0 )) && freed=0
+  TOTAL_FREED=$(( TOTAL_FREED + freed ))
+  CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
+  printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
+  log CLEAN "category=$logcat freed_bytes=$freed"
+}
+
 # ── cleanup functions: package managers ──────────────────
 
 cleanup_npm_cache() {
@@ -865,6 +906,13 @@ category_dev_dotcaches() {
     "$HOME/.expo/android-apk-cache"
     "$HOME/.expo/ios-simulator-app-cache"
     "$HOME/.net/Updates"
+    "$HOME/.nuget/packages"
+    "$HOME/.ivy2/cache"
+    "$HOME/.sbt/boot"
+    "$HOME/.gradle/wrapper/dists"
+    "$HOME/.gradle/daemon"
+    "$HOME/.terraform.d/plugin-cache"
+    "$HOME/.cache/zig"
   )
 
   # Size: sum du_safe across all extant entries
@@ -874,7 +922,7 @@ category_dev_dotcaches() {
   done
 
   section "Dev dotfolder caches"
-  printf '  Hardcoded cache subpaths under ~/ (uv, puppeteer, bun, lldb, m2, pub, etc.)\n'
+  printf '  Hardcoded cache subpaths under ~/ (uv, bun, m2, pub, nuget, sbt, terraform, zig, etc.)\n'
   printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
   if (( total == 0 )); then
     printf '  %salready empty, skipping%s\n' "$C_DIM" "$C_RESET"
@@ -2174,6 +2222,203 @@ check_outdated_globals() {
   done <<< "$out"
 }
 
+# ── 2026-05-30 additions: Tier-1 caches + opt-in user-data/maintenance ──
+#
+# All deletion targets below are either (a) hardcoded absolute paths, or
+# (b) the action of a trusted tool (xcrun simctl, qlmanage, atsutil) — no new
+# glob-exception shape is introduced. Two deliberate policy additions are
+# documented in docs/superpowers/specs/2026-05-30-tier1-and-userdata-additions-design.md:
+#   • category_ios_backups deletes USER DATA (device backups), so it carries
+#     the Xcode-Archives-style typed-DELETE guard that --yes does NOT bypass.
+#   • category_system_maintenance is the only sudo code path; it reclaims no
+#     disk and is therefore kept OUT of the freed-bytes accounting.
+
+# Xcode per-OS-version debug symbol caches; re-copied from a device on next debug.
+category_xcode_devicesupport() {
+  run_paths_category "Xcode DeviceSupport" "xcode_devicesupport" \
+    "Per-OS-version debug symbols; re-copied from device on next debug session" \
+    "$HOME/Library/Developer/Xcode/iOS DeviceSupport" \
+    "$HOME/Library/Developer/Xcode/watchOS DeviceSupport" \
+    "$HOME/Library/Developer/Xcode/tvOS DeviceSupport" \
+    "$HOME/Library/Developer/Xcode/visionOS DeviceSupport"
+}
+
+# Xcode documentation caches & downloaded docsets; re-downloaded on demand.
+category_xcode_docs() {
+  run_paths_category "Xcode documentation" "xcode_docs" \
+    "Documentation caches & downloaded docsets; re-downloaded on demand" \
+    "$HOME/Library/Developer/Xcode/DocumentationCache" \
+    "$HOME/Library/Developer/Xcode/DocumentationIndex" \
+    "$HOME/Library/Developer/Shared/Documentation/DocSets"
+}
+
+# SwiftUI preview simulator device set — can be tens of GB. Trusted tool deletes;
+# size is read from the previews UserData dir for the freed measurement.
+cleanup_xcode_previews() {
+  have xcrun || { log SKIP "category=xcode_previews reason=tool_not_installed"; return 0; }
+  run_cmd "xcrun simctl --set previews delete all" \
+    xcrun simctl --set previews delete all
+}
+category_xcode_previews() {
+  run_category "SwiftUI Preview simulators" \
+    "Xcode preview simulator devices (can be tens of GB); recreated on next preview render" \
+    "$HOME/Library/Developer/Xcode/UserData/Previews" cleanup_xcode_previews
+}
+
+# Instruments cache — denylisted by the generic ~/Library/Caches sweep
+# (com.apple.*), so it needs its own hardcoded-path category.
+cleanup_instruments_cache() {
+  run_cmd "rm -rf ~/Library/Caches/com.apple.dt.Instruments" \
+    zsh -c 'rm -rf "$HOME/Library/Caches/com.apple.dt.Instruments"'
+}
+category_instruments_cache() {
+  run_category "Instruments cache" \
+    "Instruments app cache (skipped by the generic sweep); regenerated on next launch" \
+    "$HOME/Library/Caches/com.apple.dt.Instruments" cleanup_instruments_cache
+}
+
+# Adobe media cache (Premiere / After Effects / Audition); conformed-audio &
+# peak files, rebuilt automatically on next project open.
+category_adobe_media_cache() {
+  run_paths_category "Adobe media cache" "adobe_media_cache" \
+    "Premiere/After Effects/Audition conformed-audio & peak files; rebuilt on project open" \
+    "$HOME/Library/Application Support/Adobe/Common/Media Cache Files" \
+    "$HOME/Library/Application Support/Adobe/Common/Media Cache"
+}
+
+# Desktop-app caches living OUTSIDE ~/Library/Caches (so the generic sweep
+# misses them). Figma offline render cache (cloud is source of truth) and
+# Steam store-metadata + GPU shader caches (recompiled on game launch).
+category_desktop_app_caches() {
+  run_paths_category "Desktop app caches (Figma, Steam)" "desktop_app_caches" \
+    "Figma offline render cache & Steam metadata/shader caches; re-synced/recompiled" \
+    "$HOME/Library/Application Support/Figma/Desktop" \
+    "$HOME/Library/Application Support/Figma/DesktopProfile" \
+    "$HOME/Library/Application Support/Steam/appcache" \
+    "$HOME/Library/Application Support/Steam/steamapps/shadercache"
+}
+
+# Application & crash logs; regenerated as new events occur.
+category_user_logs() {
+  run_paths_category "User & crash logs" "user_logs" \
+    "App and crash logs; regenerated as new events occur" \
+    "$HOME/Library/Logs" \
+    "$HOME/Library/Application Support/CrashReporter"
+}
+
+# QuickLook thumbnail cache — Apple's own (com.apple.*), so denylisted by the
+# generic sweep. Deleted via the trusted qlmanage tool, not rm. Size is read
+# from the per-user Darwin cache dir for the freed measurement.
+cleanup_quicklook_cache() {
+  have qlmanage || { log SKIP "category=quicklook_cache reason=tool_not_installed"; return 0; }
+  run_cmd "qlmanage -r cache" qlmanage -r cache
+}
+category_quicklook_cache() {
+  local ql="$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null)com.apple.QuickLook.thumbnailcache"
+  run_category "QuickLook thumbnails" \
+    "Finder/Quick Look thumbnail cache; rebuilt on next preview" \
+    "$ql" cleanup_quicklook_cache
+}
+
+# User font registration database; rebuilt by fontd. Trusted tool; no rm,
+# no sudo. Usually small but legitimate.
+cleanup_font_cache() {
+  have atsutil || { log SKIP "category=font_cache reason=tool_not_installed"; return 0; }
+  run_cmd "atsutil databases -removeUser" atsutil databases -removeUser
+}
+category_font_cache() {
+  run_category "Font cache (user)" \
+    "User font registration database; rebuilt by fontd (usually small)" \
+    "-" cleanup_font_cache
+}
+
+# iOS/iPadOS device backups (Finder/iTunes). UNLIKE every other category these
+# are IRREPLACEABLE USER DATA, not cache — for anyone not using iCloud Backup
+# this is the only copy of their device. Guarded like Xcode Archives: a
+# per-backup listing for informed consent, then a literal-DELETE confirm that
+# --yes does NOT bypass. rm target is the hardcoded MobileSync parent + /*.
+category_ios_backups() {
+  section "iOS device backups"
+  printf '  %sWARNING: these are full device backups, NOT a cache. Deletion is permanent%s\n' "$C_RED" "$C_RESET"
+  printf '  %sand cannot be undone unless you also back up to iCloud.%s\n' "$C_RED" "$C_RESET"
+  local base="$HOME/Library/Application Support/MobileSync/Backup"
+  local -a backups=("$base"/*(N/))
+  if (( ${#backups} == 0 )); then
+    printf '  %snone present, skipping%s\n' "$C_DIM" "$C_RESET"
+    log SKIP "category=ios_backups reason=empty"
+    return 0
+  fi
+  local b name date size before=0
+  for b in "${backups[@]}"; do
+    size="$(du_safe "$b")"
+    before=$(( before + size ))
+    name="$(/usr/libexec/PlistBuddy -c "Print :Device Name" "$b/Info.plist" 2>/dev/null)" || true
+    [[ -z "$name" ]] && name="${b:t}"
+    date="$(/usr/libexec/PlistBuddy -c "Print :Last Backup Date" "$b/Info.plist" 2>/dev/null)" || true
+    [[ -z "$date" ]] && date="unknown date"
+    printf '  %s%s%s — %s — %s%s%s\n' "$C_BOLD" "$name" "$C_RESET" \
+      "$date" "$C_YELLOW" "$(human_size "$size")" "$C_RESET"
+  done
+  printf '  Total: %s%s%s across %d backup(s)\n' \
+    "$C_YELLOW" "$(human_size "$before")" "$C_RESET" "${#backups}"
+
+  if ! confirm "Delete ALL these device backups?"; then
+    log DECLINE "category=ios_backups size_bytes=$before"
+    return 0
+  fi
+  # Second prompt: require the literal string DELETE even under --yes.
+  printf '  %sType DELETE (all caps) to confirm permanent deletion:%s ' "$C_RED" "$C_RESET"
+  local confirm_text
+  read -r confirm_text
+  if [[ "$confirm_text" != "DELETE" ]]; then
+    printf '  aborted (did not type DELETE)\n'
+    log DECLINE "category=ios_backups stage=double_prompt"
+    return 0
+  fi
+
+  run_cmd "rm -rf ~/Library/Application Support/MobileSync/Backup/*" \
+    zsh -c 'rm -rf "$HOME/Library/Application Support/MobileSync/Backup/"*' || {
+      log ERROR "category=ios_backups rc=$?"
+      return 0
+    }
+
+  local after=0 freed
+  after="$(du_safe "$base")"
+  freed=$(( before - after ))
+  (( freed < 0 )) && freed=0
+  TOTAL_FREED=$(( TOTAL_FREED + freed ))
+  CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
+  printf '  %s→ deleted backups, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
+  log CLEAN "category=ios_backups freed_bytes=$freed"
+}
+
+# System maintenance — purge inactive RAM and rebuild the Spotlight index.
+# Neither reclaims disk (mdutil temporarily uses MORE); kept OUT of the freed
+# total. The only sudo code path in the script, so it is fully opt-in. Under
+# --dry-run run_cmd prints but never executes, so sudo is never invoked.
+category_system_maintenance() {
+  section "System maintenance (no disk reclaimed)"
+  printf '  %sThese do not free disk space.%s purge frees inactive RAM; mdutil rebuilds\n' "$C_DIM" "$C_RESET"
+  printf '  the Spotlight index. Both need sudo (you may be prompted for your password).\n'
+  if ! confirm "Run system maintenance (sudo)?"; then
+    log DECLINE "category=system_maintenance"
+    return 0
+  fi
+  if have purge; then
+    run_cmd "sudo purge" sudo purge
+    log INFO "category=system_maintenance step=purge"
+  else
+    log SKIP "category=system_maintenance step=purge reason=tool_not_installed"
+  fi
+  if have mdutil; then
+    run_cmd "sudo mdutil -E /" sudo mdutil -E /
+    log INFO "category=system_maintenance step=mdutil"
+  else
+    log SKIP "category=system_maintenance step=mdutil reason=tool_not_installed"
+  fi
+  printf '  %s→ maintenance complete (no disk reclaimed)%s\n' "$C_GREEN" "$C_RESET"
+}
+
 main() {
   log START "dry_run=$DRY_RUN yes=$ASSUME_YES prepare_pnpm=$PREPARE_PNPM"
 
@@ -2184,13 +2429,13 @@ main() {
   printf '  %sFlags:%s --dry-run | --yes | --prepare-for-pnpm | --help\n' \
     "$C_BOLD" "$C_RESET"
   printf '  %sLog:%s   %s\n' "$C_BOLD" "$C_RESET" "$LOG_FILE"
-  printf '  %sAbort:%s Ctrl-C at any prompt. Xcode Archives has a second DELETE confirm.\n' \
+  printf '  %sAbort:%s Ctrl-C at any prompt. Xcode Archives & iOS backups have a second DELETE confirm.\n' \
     "$C_BOLD" "$C_RESET"
   if (( DRY_RUN )); then
     printf '  %s(dry-run: nothing will be deleted)%s\n' "$C_YELLOW" "$C_RESET"
   fi
   if (( ASSUME_YES )); then
-    printf '  %s(--yes: prompts auto-accepted; Xcode Archives still double-prompts)%s\n' "$C_YELLOW" "$C_RESET"
+    printf '  %s(--yes: prompts auto-accepted; Xcode Archives & iOS backups still double-prompt)%s\n' "$C_YELLOW" "$C_RESET"
   fi
   if (( PREPARE_PNPM )); then
     printf '  %s(--prepare-for-pnpm: only npm/yarn caches across all Node versions will be touched)%s\n' "$C_YELLOW" "$C_RESET"
@@ -2228,6 +2473,10 @@ main() {
     category_xctest_xcpg_devices
     category_xcode_dt_cache
     category_xcode_device_logs
+    category_xcode_previews
+    category_xcode_devicesupport
+    category_xcode_docs
+    category_instruments_cache
 
     category_swiftpm
     category_clangd_index
@@ -2241,6 +2490,12 @@ main() {
     category_container_vms
     category_browser_caches
 
+    category_adobe_media_cache
+    category_desktop_app_caches
+    category_user_logs
+    category_quicklook_cache
+    category_font_cache
+
     category_apple_music_stream_cache
     category_mail_downloads
     category_apple_maps_tiles
@@ -2253,11 +2508,14 @@ main() {
     category_tm_local_snapshots
     category_llm_caches
     category_macos_installers
+    category_ios_backups
 
     category_trash
 
     check_tool_versions
     check_outdated_globals
+
+    category_system_maintenance
   fi
 
   printf '\n%s── Summary ────────────────────%s\n' "$C_BOLD" "$C_RESET"

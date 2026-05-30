@@ -29,11 +29,17 @@ Every cache category follows a fixed shape: show size → prompt → run cleanup
 2. Write `category_<x>()` that calls `run_category` with the path used for sizing.
 3. Add `category_<x>` to the run order in `main()` (mac-cleaner.sh:560).
 
+### Multi-path categories: `run_paths_category`
+
+Hardcoded-multi-path categories (sum size across several literal paths, prompt once, delete each, measure) use the `run_paths_category <name> <log_cat> <desc> <path>...` helper instead of duplicating the body. The older `dev_dotcaches` / `python_extras` / `node_extras` / `llm_caches` still inline their own copy (don't refactor them); new multi-path categories (`xcode_devicesupport`, `xcode_docs`, `adobe_media_cache`, `desktop_app_caches`, `user_logs`) use the helper. Every path passed must be a literal/hardcoded absolute path (safety rule 1).
+
 ### Categories that bypass `run_category`
 
-Five categories need bespoke wrappers and **must not** be folded back into `run_category`:
+Seven categories need bespoke wrappers and **must not** be folded back into `run_category`:
 
 - **`category_xcode_archives`** — requires a second confirmation where the user types the literal string `DELETE` (case-sensitive). `--yes` does **not** bypass this.
+- **`category_ios_backups`** — the script's **only user-data category** (device backups in `~/Library/Application Support/MobileSync/Backup`, irreplaceable for non-iCloud users). Lists each backup (device/date/size from `Info.plist`) then requires typing `DELETE`; `--yes` does **not** bypass. `rm` target is the hardcoded parent + `*` glob. Spec: `2026-05-30-tier1-and-userdata-additions-design.md`.
+- **`category_system_maintenance`** — the script's **only `sudo` path** (`sudo purge`, `sudo mdutil -E /`). Fully opt-in; reclaims no disk, so it must **not** increment `TOTAL_FREED` / `CATEGORIES_CLEANED`.
 - **`category_npm_yarn_all_nvm`** — iterates `$NVM_DIR/versions/node/*` and invokes each version's bundled `npm`/`yarn`. This catches per-version `.npmrc` cache overrides that the single-path categories miss.
 - **`category_npm_yarn_all_brew`** — Homebrew sibling of the nvm sweep. Iterates `brew list --formula` matches for `node` / `node@*` and invokes each formula's bundled `npm`/`yarn` to catch per-formula `.npmrc` cache overrides.
 - **`category_expo_metro`** — sums size across multiple paths (`~/.expo/cache`, `/tmp/metro-*`, `/tmp/haste-map-*`, `/tmp/react-*`).
@@ -62,7 +68,7 @@ These come from the spec's "Safety guarantees" section and must be preserved on 
    Future categories cannot invent new exception shapes. If a category cannot fit one of these three patterns (denylist-filtered children; literal-pattern allowlist of children; allowlist-profile + hardcoded-leaf), it does not get an exception — it gets rejected.
 2. **Tool detection before invocation.** Use `have <cmd>`; if missing, log `SKIP reason=tool_not_installed` and return 0. Never let `command not found` reach the user.
 3. **Auto-skip empty caches.** When `du_safe` returns 0, print "already empty, skipping", log `SKIP reason=empty`, and do not prompt.
-4. **`--yes` does not bypass the Xcode Archives DELETE prompt.** Treat that double-prompt as load-bearing.
+4. **`--yes` does not bypass the typed-`DELETE` prompts** on `category_xcode_archives` or `category_ios_backups`. Treat both double-prompts as load-bearing. (iOS backups are user data, not cache — the only such category.)
 
 ## Repository layout
 

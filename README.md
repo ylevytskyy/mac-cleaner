@@ -25,7 +25,7 @@ No daemons, no config, no dependencies beyond the tools whose caches it cleans.
 | Trash | `~/.Trash` |
 | App caches | `~/Library/Caches/*` immediate children, denylist-filtered (Apple system, sync state, login-bearing apps preserved) |
 | Temp dirs | `/tmp` and `$TMPDIR` — user-owned entries older than 7 days |
-| Dev dotcaches | hardcoded `~/.cache/uv`, `~/.bun/install/cache`, `~/.m2/repository`, etc. |
+| Dev dotcaches | hardcoded `~/.cache/uv`, `~/.bun/install/cache`, `~/.m2/repository`, `~/.nuget/packages`, `~/.ivy2/cache`, `~/.sbt/boot`, `~/.gradle/{wrapper/dists,daemon}`, `~/.terraform.d/plugin-cache`, `~/.cache/zig`, etc. |
 | JetBrains IDE caches | `~/Library/Caches/JetBrains` — IntelliJ, WebStorm, PyCharm, GoLand, RubyMine, etc.; re-indexed on next IDE launch |
 
 ### System Data categories
@@ -59,6 +59,18 @@ Targets the buckets macOS reports as **"System Data"** (System Settings → Gene
 | Apple Intelligence platform cache | `~/Library/IntelligencePlatform/` — knowledge graph + per-locale inference artifacts; daemon rebuilds within hours; new in Tahoe 26.x |
 | Wallpaper aerials | `~/Library/Application Support/com.apple.wallpaper/aerials/{videos,thumbnails}` — aerial wallpaper videos and thumbnails; re-downloads on next screensaver activation; manifest preserved |
 | Android Studio + JetBrains IDE logs | `~/Library/Logs/{Google,JetBrains}` — multi-version log accumulation; each IDE recreates its log dir on next launch |
+| SwiftUI Preview simulators | `xcrun simctl --set previews delete all` — preview device set (can be tens of GB); recreated on next preview render |
+| Xcode DeviceSupport | `~/Library/Developer/Xcode/{iOS,watchOS,tvOS,visionOS} DeviceSupport` — per-OS-version debug symbols; re-copied from device on next debug session |
+| Xcode documentation | `~/Library/Developer/Xcode/{DocumentationCache,DocumentationIndex}` + `~/Library/Developer/Shared/Documentation/DocSets` — re-downloaded on demand |
+| Instruments cache | `~/Library/Caches/com.apple.dt.Instruments` — Apple `com.apple.*` cache the generic sweep skips; regenerated on launch |
+| Adobe media cache | `~/Library/Application Support/Adobe/Common/Media Cache{, Files}` — Premiere/After Effects/Audition conformed-audio & peak files; rebuilt on project open |
+| Desktop app caches | `~/Library/Application Support/Figma/{Desktop,DesktopProfile}` + `Steam/{appcache,steamapps/shadercache}` — cloud-backed render cache & recompilable shaders |
+| User & crash logs | `~/Library/Logs` + `~/Library/Application Support/CrashReporter` — regenerated as new events occur |
+| QuickLook thumbnails | `qlmanage -r cache` — Finder/Quick Look thumbnail cache; rebuilt on next preview |
+| Font cache (user) | `atsutil databases -removeUser` — user font registration DB; rebuilt by fontd |
+| **iOS device backups** | `~/Library/Application Support/MobileSync/Backup` — **irreplaceable user data, not a cache**; lists each backup (device, date, size) then requires typing `DELETE`; `--yes` does NOT bypass |
+
+A final **System maintenance** step (opt-in, the only `sudo` in the script) offers `sudo purge` (free inactive RAM) and `sudo mdutil -E /` (rebuild Spotlight index). Neither reclaims disk, so it is kept out of the freed-bytes total.
 
 After cleanup it also runs a **version audit** — checks `npm` / `yarn` / `pnpm` against the registry and lists outdated global npm packages, prompting before any update.
 
@@ -69,14 +81,13 @@ These are real System Data contributors but the safety/value tradeoff doesn't fi
 - **iCloud Drive cache / "Optimize Mac Storage"** → System Settings → Apple Account → iCloud → Drive → Optimize Mac Storage. Risk of permanent loss of unsynced documents prevents scripting.
 - **Photos library derivatives / thumbnails** → quit Photos, then hold ⌥⌘ while opening Photos → Repair Library / Rebuild Thumbnails. Apple's supported rebuild path.
 - **Messages attachments / `chat.db`** → Messages → Settings → General → Keep Messages: 30 Days. Risk of irreversible loss if iCloud Messages is off.
-- **iOS device backups (`~/Library/Application Support/MobileSync/Backup`)** → Finder → connect device → Manage Backups. Uses Apple's index to identify each backup safely.
 
 ## Usage
 
 ```bash
 ./mac-cleaner.sh                  # interactive run
 ./mac-cleaner.sh --dry-run        # preview only — nothing is deleted
-./mac-cleaner.sh --yes            # auto-accept y/N prompts (Xcode Archives still double-prompts)
+./mac-cleaner.sh --yes            # auto-accept y/N prompts (Xcode Archives & iOS backups still double-prompt)
 ./mac-cleaner.sh --include-volumes # also prune Docker/Podman named volumes (DESTROYS DATA)
 ./mac-cleaner.sh --help
 ```
@@ -92,8 +103,10 @@ At the end you get a summary: total bytes freed and number of categories cleaned
 
 ## Safety
 
-- **Nothing is deleted without an explicit prompt.** `--yes` skips the y/N, but the Xcode Archives prompt always requires typing the literal string `DELETE`.
-- `--dry-run` prints every command it *would* run, deletes nothing.
+- **Nothing is deleted without an explicit prompt.** `--yes` skips the y/N, but the Xcode Archives **and iOS device backups** prompts always require typing the literal string `DELETE`.
+- **iOS device backups are the only user-data category.** They are guarded with a per-backup listing plus the typed-`DELETE` confirm; every other category deletes only regenerable caches.
+- **`sudo` is used in exactly one place** — the opt-in System maintenance step (`purge` / `mdutil`), which reclaims no disk and is excluded from the freed total. Everything else runs as your user.
+- `--dry-run` prints every command it *would* run, deletes nothing (including the `sudo` maintenance commands).
 - Gradle: the script stops `gradle --stop` (or kills `GradleDaemon` / `KotlinCompileDaemon`) before deleting, because a half-deleted Gradle cache produces broken Android builds. If a delete partially fails, the script tells you loudly and gives you the recovery command.
 - Categories never abort the run — a per-category failure logs `ERROR` and the script continues to the next one.
 - All actions are logged to `~/.mac-cleaner.log` with a 4-byte run id so you can correlate runs.
