@@ -308,7 +308,15 @@ is_category_enabled() {
 run_cat() {
   local key="$1" groups="$2" fn="$3"
   is_category_enabled "$key" "$groups" || return 0
+  set +e
   "$fn"
+  local rc=$?
+  set -e
+  if (( rc != 0 )); then
+    printf '  %sERROR:%s category %s failed with code %d (continuing)\n' "$C_RED" "$C_RESET" "$key" "$rc"
+    log ERROR "category=$key rc=$rc"
+  fi
+  return 0
 }
 
 # category runner: handles the size-show / prompt / delete-and-measure loop.
@@ -411,7 +419,7 @@ run_paths_category() {
   for p in "${paths[@]}"; do
     [[ -e "$p" ]] || continue
     rel="${p/#$HOME/~}"
-    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}"
+    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}" || true
   done
   local after=0
   for p in "${paths[@]}"; do
@@ -927,6 +935,7 @@ category_app_caches() {
     "Claude"
     "Docker Desktop"
     docker-secrets-engine
+    dotslash
     eas-cli
     FamilyCircle
     familycircled
@@ -1036,13 +1045,13 @@ category_app_caches() {
           [[ -e "$as_sub" ]] || continue
           local as_name="${as_sub:t}"
           run_cmd "rm -rf ~/Library/Caches/Google/$as_name" \
-            zsh -c "rm -rf ${(q)as_sub}"
+            zsh -c "rm -rf ${(q)as_sub}" || true
         done
       fi
       # Always attempt Google/Chrome (browser HTTP cache, no IDE-lock concern)
       if [[ -e "$child/Chrome" ]]; then
         run_cmd "rm -rf ~/Library/Caches/Google/Chrome" \
-          zsh -c "rm -rf ${(q)child}/Chrome"
+          zsh -c "rm -rf ${(q)child}/Chrome" || true
       fi
       # Any other Google/ child defaults to DENY — do nothing
       continue
@@ -1054,7 +1063,7 @@ category_app_caches() {
     fi
 
     run_cmd "rm -rf ~/Library/Caches/$name" \
-      zsh -c "rm -rf ${(q)child}"
+      zsh -c "rm -rf ${(q)child}" || true
   done
 
   # ── measure freed ─────────────────────────────────────────────────────
