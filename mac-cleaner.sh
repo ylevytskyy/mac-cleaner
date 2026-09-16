@@ -56,7 +56,8 @@ Flags:
   --skip <cats>       Skip specified categories or groups (comma-separated).
   --list              List all available category keys and groups, then exit.
   --dry-run           Show what would be deleted without deleting. Still prompts.
-  --yes, -y           Skip y/N prompts (Xcode Archives & iOS backups still double-prompt).
+  --yes, -y           Skip y/N prompts (Xcode Archives & iOS backups still double-prompt;
+                      sudo maintenance and npm global upgrades always ask).
   --prepare-for-pnpm  Clean only npm/yarn caches across nvm + brew Node versions; skip everything else.
   --include-volumes   Also prune Docker/Podman named volumes (DESTROYS DATA). Off by default.
   --help, -h          This message.
@@ -191,6 +192,29 @@ if (( LIST_CATEGORIES )); then
   exit 0
 fi
 
+# Keys and groups accepted by --only / --skip (must match list_categories + run_cat calls in main).
+VALID_CATEGORY_KEYS="npm_nvm npm_brew npm yarn pnpm bun deno uv pip python_extras node_extras brew \
+deriveddata archives ios_sim coresimulator coresimulator_logs xctest xcode_dt xcode_logs xcode_previews \
+xcode_devicesupport xcode_docs instruments cocoapods gradle android_build android_studio_logs expo_metro \
+swiftpm clangd ccache sccache cargo go composer bazel containers browsers adobe desktop_apps claude llm \
+app_caches temp dev_dotcaches user_logs jetbrains quicklook fonts music mail_downloads maps_tiles \
+diagnostic_reports intelligence_platform wallpaper software_update timemachine macos_installers \
+ios_backups trash tool_versions npm_globals system_maintenance \
+node python xcode mobile dev containers browsers media apps ai system userdata audit"
+
+validate_category_list() {
+  local item
+  for item in "${(@s:,:)1}"; do
+    [[ -z "$item" ]] && continue
+    if [[ " $VALID_CATEGORY_KEYS " != *" $item "* ]]; then
+      echo "Unknown category: $item (see --list)" >&2
+      exit 2
+    fi
+  done
+}
+if [[ -n "$ONLY_CATEGORIES" ]]; then validate_category_list "$ONLY_CATEGORIES"; fi
+if [[ -n "$SKIP_CATEGORIES" ]]; then validate_category_list "$SKIP_CATEGORIES"; fi
+
 # ── helpers ──────────────────────────────────────────────
 
 log() {
@@ -236,6 +260,16 @@ confirm() {
     printf '  %s [y/N] %sy (auto)%s\n' "$prompt" "$C_DIM" "$C_RESET"
     return 0
   fi
+  printf '  %s [y/N] ' "$prompt"
+  local ans=""
+  read -r ans || ans=""
+  [[ "$ans" == "y" || "$ans" == "Y" ]]
+}
+
+confirm_explicit() {
+  # confirm_explicit "<prompt>" — like confirm, but --yes does NOT auto-accept.
+  # Used for sudo and global package upgrades; declines on EOF.
+  local prompt="$1"
   printf '  %s [y/N] ' "$prompt"
   local ans=""
   read -r ans || ans=""
@@ -481,9 +515,10 @@ cleanup_pnpm_store() {
 }
 
 cleanup_bun_cache() {
-  if have bun; then
-    run_cmd "bun pm cache rm" bun pm cache rm
-  elif [[ -d "$HOME/.bun/install/cache" ]]; then
+  # `bun pm cache rm` refuses to run unless cwd has a package.json (bun 1.x),
+  # so it fails with rc=1 from an arbitrary directory. The cache path is fixed
+  # and hardcoded, so remove it directly.
+  if [[ -d "$HOME/.bun/install/cache" ]]; then
     run_cmd "rm -rf ~/.bun/install/cache" zsh -c 'rm -rf "$HOME/.bun/install/cache"'
   fi
 }
@@ -491,9 +526,8 @@ cleanup_bun_cache() {
 cleanup_deno_cache() {
   if have deno; then
     run_cmd "deno clean" deno clean
-  elif [[ -d "${DENO_DIR:-$HOME/Library/Caches/deno}" ]]; then
-    local p="${DENO_DIR:-$HOME/Library/Caches/deno}"
-    run_cmd "rm -rf ~/Library/Caches/deno" zsh -c "rm -rf ${(q)p}"
+  elif [[ -d "$HOME/Library/Caches/deno" ]]; then
+    run_cmd "rm -rf ~/Library/Caches/deno" zsh -c 'rm -rf "$HOME/Library/Caches/deno"'
   fi
 }
 
@@ -551,7 +585,7 @@ category_bun_cache() {
 }
 
 category_deno_cache() {
-  local p="${DENO_DIR:-$HOME/Library/Caches/deno}"
+  local p="$HOME/Library/Caches/deno"
   run_category "Deno cache" "Deno module, npm, and compiler cache" "$p" cleanup_deno_cache
 }
 
@@ -1034,7 +1068,7 @@ category_app_caches() {
     # Special case: Google/ — sub-iterate with Android Studio check
     if [[ "$name" == "Google" ]]; then
       # Check if Android Studio is running
-      if pgrep -f '/Applications/Android Studio.app' >/dev/null 2>&1; then
+      if pgrep -f '^/Applications/Android Studio.app/Contents/MacOS/' >/dev/null 2>&1; then
         printf '  %sWARNING:%s Android Studio is running. Close it before clearing its caches; skipping Google/AndroidStudio*/\n' \
           "$C_YELLOW" "$C_RESET"
         log SKIP "category=app_caches reason=android_studio_running entry=Google/AndroidStudio*"
@@ -1114,7 +1148,8 @@ _temp_size_parent() {
 
 category_temp() {
   local tmp_dir="/tmp"
-  local user_tmp="${TMPDIR%/}"
+  local user_tmp="${TMPDIR:-}"
+  user_tmp="${user_tmp%/}"
   # Resolve /tmp -> /private/tmp on macOS for consistent comparison.
   # readlink returns a relative path ("private/tmp") on macOS, so prepend / if needed.
   if [[ -L "$tmp_dir" ]]; then
@@ -1577,7 +1612,7 @@ cleanup_bazel() {
     run_cmd "bazel shutdown (best-effort)" bazel shutdown || true
   fi
   local rc=0 p partial=0
-  for p in "/private/var/tmp/_bazel_$USER" "$HOME/Library/Caches/bazel"; do
+  for p in "/private/var/tmp/_bazel_${USER:-$(id -un)}" "$HOME/Library/Caches/bazel"; do
     [[ -d "$p" ]] || continue
     local rel
     case "$p" in
@@ -1589,7 +1624,7 @@ cleanup_bazel() {
   if (( partial )); then
     printf '  %sWARNING:%s Bazel cache partially deleted — daemon or IDE held file locks.\n' "$C_RED" "$C_RESET"
     printf '           Close your IDE, then re-run: %sbazel shutdown && rm -rf /private/var/tmp/_bazel_%s%s\n' \
-      "$C_BOLD" "$USER" "$C_RESET"
+      "$C_BOLD" "${USER:-$(id -un)}" "$C_RESET"
     log WARN "category=bazel partial_delete=true"
   fi
   return $rc
@@ -1604,7 +1639,7 @@ category_bazel() {
     return 0
   fi
   local total=0 p
-  for p in "/private/var/tmp/_bazel_$USER" "$HOME/Library/Caches/bazel"; do
+  for p in "/private/var/tmp/_bazel_${USER:-$(id -un)}" "$HOME/Library/Caches/bazel"; do
     [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
   done
   if (( SCAN_ONLY )); then
@@ -1630,7 +1665,7 @@ category_bazel() {
   fi
   cleanup_bazel || { log ERROR "category=bazel rc=$?"; }
   local after=0
-  for p in "/private/var/tmp/_bazel_$USER" "$HOME/Library/Caches/bazel"; do
+  for p in "/private/var/tmp/_bazel_${USER:-$(id -un)}" "$HOME/Library/Caches/bazel"; do
     [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
   done
   local freed=$(( total - after ))
@@ -1646,10 +1681,12 @@ category_bazel() {
 # NEVER rm a VM disk image file — corrupts the VM. Always use the tool's CLI.
 # --include-volumes flag (off by default) gates Docker/Podman volume pruning.
 
+_VM_PRUNED=0  # set by _vm_cleanup_one: 1 only when the prune was confirmed and succeeded
 _vm_cleanup_one() {
   # _vm_cleanup_one <tool-name> <disk-image-path> <prune-cmd...>
   local tool="$1" disk="$2"; shift 2
   local before=0 after=0
+  _VM_PRUNED=0
   [[ -e "$disk" ]] && before=$(du_safe "$disk")
   if (( SCAN_ONLY )); then
     if (( before > 0 )); then
@@ -1673,6 +1710,7 @@ _vm_cleanup_one() {
     log ERROR "category=container_vms tool=$tool rc=$rc"
     return 0
   fi
+  _VM_PRUNED=1
   local freed=$(( before - after ))
   (( freed < 0 )) && freed=0
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
@@ -1706,8 +1744,11 @@ category_container_vms() {
         docker system prune -a -f
     fi
     # Reclaim helper container actually shrinks Docker.raw on host.
-    run_cmd "docker reclaim-space helper" \
-      docker run --rm --privileged --pid=host docker/desktop-reclaim-space || true
+    # Only after a confirmed, successful prune — never in --scan or on decline.
+    if (( ! SCAN_ONLY && _VM_PRUNED )); then
+      run_cmd "docker reclaim-space helper" \
+        docker run --rm --privileged --pid=host docker/desktop-reclaim-space || true
+    fi
   else
     log SKIP "category=container_vms tool=docker reason=tool_not_installed"
   fi
@@ -1919,7 +1960,7 @@ _browser_clean_firefox() {
     log SKIP "category=browser_caches browser=firefox reason=tool_not_installed"
     return 0
   fi
-  if (( ! SCAN_ONLY )) && { pgrep -x firefox >/dev/null 2>&1 || pgrep -f '/Applications/Firefox.app' >/dev/null 2>&1; }; then
+  if (( ! SCAN_ONLY )) && { pgrep -x firefox >/dev/null 2>&1 || pgrep -f '^/Applications/Firefox.app/Contents/MacOS/' >/dev/null 2>&1; }; then
     printf '  %sFirefox is running, skipping its caches.%s\n' "$C_YELLOW" "$C_RESET"
     log SKIP "category=browser_caches browser=firefox reason=app_running"
     return 0
@@ -2037,7 +2078,7 @@ _browser_clean_slack() {
     log SKIP "category=browser_caches browser=slack reason=tool_not_installed"
     return 0
   fi
-  if (( ! SCAN_ONLY )) && pgrep -f '/Applications/Slack.app' >/dev/null 2>&1; then
+  if (( ! SCAN_ONLY )) && pgrep -f '^/Applications/Slack.app/Contents/MacOS/' >/dev/null 2>&1; then
     printf '  %sSlack is running, skipping its caches.%s\n' "$C_YELLOW" "$C_RESET"
     log SKIP "category=browser_caches browser=slack reason=app_running"
     return 0
@@ -2097,36 +2138,36 @@ category_browser_caches() {
   local before_cleaned=$CATEGORIES_CLEANED
   local before_freed=$TOTAL_FREED
   _browser_clean_safari
-  _browser_clean_chromium chrome '/Applications/Google Chrome.app' \
+  _browser_clean_chromium chrome '^/Applications/Google Chrome.app/Contents/MacOS/' \
     "$HOME/Library/Application Support/Google/Chrome"
-  _browser_clean_chromium arc '/Applications/Arc.app' \
+  _browser_clean_chromium arc '^/Applications/Arc.app/Contents/MacOS/' \
     "$HOME/Library/Application Support/Arc/User Data"
-  _browser_clean_chromium edge '/Applications/Microsoft Edge.app' \
+  _browser_clean_chromium edge '^/Applications/Microsoft Edge.app/Contents/MacOS/' \
     "$HOME/Library/Application Support/Microsoft Edge"
-  _browser_clean_chromium brave '/Applications/Brave Browser.app' \
+  _browser_clean_chromium brave '^/Applications/Brave Browser.app/Contents/MacOS/' \
     "$HOME/Library/Application Support/BraveSoftware/Brave-Browser"
   _browser_clean_firefox
   _browser_clean_slack
   _browser_clean_electron vscode "VS Code" \
-    '/Applications/Visual Studio Code.app' \
+    '^/Applications/Visual Studio Code.app/Contents/MacOS/' \
     "$HOME/Library/Application Support/Code"
   _browser_clean_electron vscode_insiders "VS Code Insiders" \
-    '/Applications/Visual Studio Code - Insiders.app' \
+    '^/Applications/Visual Studio Code - Insiders.app/Contents/MacOS/' \
     "$HOME/Library/Application Support/Code - Insiders"
   _browser_clean_electron cursor "Cursor" \
-    '/Applications/Cursor.app' \
+    '^/Applications/Cursor.app/Contents/MacOS/' \
     "$HOME/Library/Application Support/Cursor"
   _browser_clean_electron windsurf "Windsurf" \
-    '/Applications/Windsurf.app' \
+    '^/Applications/Windsurf.app/Contents/MacOS/' \
     "$HOME/Library/Application Support/Windsurf"
   _browser_clean_electron discord "Discord" \
-    '/Applications/Discord.app' \
+    '^/Applications/Discord.app/Contents/MacOS/' \
     "$HOME/Library/Application Support/discord"
   _browser_clean_electron teams "Microsoft Teams" \
-    '/Applications/Microsoft Teams.app' \
+    '^/Applications/Microsoft Teams.app/Contents/MacOS/' \
     "$HOME/Library/Application Support/Microsoft/Teams"
   _browser_clean_electron notion "Notion" \
-    '/Applications/Notion.app' \
+    '^/Applications/Notion.app/Contents/MacOS/' \
     "$HOME/Library/Application Support/Notion"
   # Count this category as cleaned if any sub-browser produced freed bytes.
   if (( TOTAL_FREED > before_freed )); then
@@ -2172,12 +2213,12 @@ cleanup_diagnostic_reports() {
   run_cmd "rm -rf ~/Library/Logs/DiagnosticReports/Retired" \
     zsh -c 'rm -rf "$HOME/Library/Logs/DiagnosticReports/Retired"'
   run_cmd "rm -f ~/Library/Logs/DiagnosticReports/*.ips ~/Library/Logs/DiagnosticReports/*.diag" \
-    zsh -c 'rm -f "$HOME/Library/Logs/DiagnosticReports/"*.ips "$HOME/Library/Logs/DiagnosticReports/"*.diag(N)'
+    zsh -c 'rm -f "$HOME/Library/Logs/DiagnosticReports/"*.ips(N) "$HOME/Library/Logs/DiagnosticReports/"*.diag(N)'
   if id -Gn | tr ' ' '\n' | grep -qx _analyticsusers; then
     run_cmd "rm -rf /Library/Logs/DiagnosticReports/Retired" \
       zsh -c 'rm -rf /Library/Logs/DiagnosticReports/Retired'
     run_cmd "rm -f /Library/Logs/DiagnosticReports/*.ips /Library/Logs/DiagnosticReports/*.diag" \
-      zsh -c 'rm -f /Library/Logs/DiagnosticReports/*.ips /Library/Logs/DiagnosticReports/*.diag(N)'
+      zsh -c 'rm -f /Library/Logs/DiagnosticReports/*.ips(N) /Library/Logs/DiagnosticReports/*.diag(N)'
   else
     log SKIP "category=diagnostic_reports reason=insufficient_perms group=_analyticsusers path=/Library/Logs/DiagnosticReports"
   fi
@@ -2249,7 +2290,7 @@ category_android_studio_logs() {
     fi
     return 0
   fi
-  if pgrep -f "Android Studio.app" >/dev/null 2>&1; then
+  if pgrep -f '^/Applications/Android Studio.app/Contents/MacOS/' >/dev/null 2>&1; then
     section "Android Studio + JetBrains IDE logs"
     printf '  %sAndroid Studio is running. Close it and re-run.%s\n' \
       "$C_YELLOW" "$C_RESET"
@@ -2542,12 +2583,24 @@ category_node_extras() {
 }
 
 category_claude_cache() {
+  local -a paths=(
+    "$HOME/.claude/cache"
+    "$HOME/.claude/paste-cache"
+    "$HOME/.claude/debug"
+  )
+  # Live Claude Code sessions source ~/.claude/shell-snapshots on every Bash call.
+  if pgrep -x claude >/dev/null 2>&1; then
+    if (( ! SCAN_ONLY )); then
+      printf '  %sWARNING:%s Claude Code is running; keeping ~/.claude/shell-snapshots (live sessions depend on it).\n' \
+        "$C_YELLOW" "$C_RESET"
+    fi
+    log SKIP "category=claude_cache reason=app_running entry=shell-snapshots"
+  else
+    paths+=("$HOME/.claude/shell-snapshots")
+  fi
   run_paths_category "Claude Code caches" "claude_cache" \
     "Claude Code CLI temporary caches, paste cache, and shell snapshots (~/.claude)" \
-    "$HOME/.claude/cache" \
-    "$HOME/.claude/paste-cache" \
-    "$HOME/.claude/shell-snapshots" \
-    "$HOME/.claude/debug"
+    "${paths[@]}"
 }
 
 # AI / LLM model caches. Largest single category by reclaim potential.
@@ -2716,7 +2769,7 @@ check_tool_versions() {
     cmp="$(semver_cmp "$current" "$latest")"
     if [[ "$cmp" == "-1" ]]; then
       printf '  %-6s %s%s%s → latest %s%s%s\n' "$tool" "$C_YELLOW" "$current" "$C_RESET" "$C_GREEN" "$latest" "$C_RESET"
-      if confirm "Update $tool to $latest?"; then
+      if confirm_explicit "Update $tool to $latest?"; then
         run_cmd "npm i -g $tool@latest" npm i -g "$tool@latest"
         log UPDATE "tool=$tool from=$current to=$latest"
       else
@@ -2754,7 +2807,7 @@ check_outdated_globals() {
     current="${f3##*@}"
     latest="${f4##*@}"
     printf '  %-30s %s%s%s → %s%s%s\n' "$pkg" "$C_YELLOW" "$current" "$C_RESET" "$C_GREEN" "$latest" "$C_RESET"
-    if confirm "Update $pkg to $latest?"; then
+    if confirm_explicit "Update $pkg to $latest?"; then
       run_cmd "npm i -g ${pkg}@latest" npm i -g "${pkg}@latest"
       log UPDATE "pkg=$pkg from=$current to=$latest"
     else
@@ -2961,7 +3014,7 @@ category_system_maintenance() {
   section "System maintenance (no disk reclaimed)"
   printf '  %sThese do not free disk space.%s purge frees inactive RAM; mdutil rebuilds\n' "$C_DIM" "$C_RESET"
   printf '  the Spotlight index. Both need sudo (you may be prompted for your password).\n'
-  if ! confirm "Run system maintenance (sudo)?"; then
+  if ! confirm_explicit "Run system maintenance (sudo)?"; then
     log DECLINE "category=system_maintenance"
     return 0
   fi
@@ -2996,7 +3049,7 @@ main() {
     printf '  %s(dry-run: nothing will be deleted)%s\n' "$C_YELLOW" "$C_RESET"
   fi
   if (( ASSUME_YES )); then
-    printf '  %s(--yes: prompts auto-accepted; Xcode Archives & iOS backups still double-prompt)%s\n' "$C_YELLOW" "$C_RESET"
+    printf '  %s(--yes: prompts auto-accepted; Xcode Archives & iOS backups still double-prompt; sudo & npm upgrades still ask)%s\n' "$C_YELLOW" "$C_RESET"
   fi
   if (( PREPARE_PNPM )); then
     printf '  %s(--prepare-for-pnpm: only npm/yarn caches across all Node versions will be touched)%s\n' "$C_YELLOW" "$C_RESET"
