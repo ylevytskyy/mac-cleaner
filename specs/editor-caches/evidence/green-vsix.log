@@ -1,0 +1,4 @@
+$ python3 specs/editor-caches/smoke.py vsix
+VSIX: попередній перегляд, очищення, збереження даних і повторний запуск — успішно
+
+exit: 0

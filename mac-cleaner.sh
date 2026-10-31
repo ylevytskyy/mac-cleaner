@@ -2033,6 +2033,18 @@ _browser_clean_electron() {
     "DawnWebGPUCache"
     "CachedData"
   )
+  case "$slug" in
+    vscode|vscode_insiders|cursor|windsurf|devin|devin_next)
+      # Завантажені архіви розширень; встановлені розширення зберігаються окремо.
+      leaves+=("CachedExtensionVSIXs")
+      ;;
+  esac
+  case "$slug" in
+    devin|devin_next)
+      # Зберігаємо стан вебзастосунків і розмов нових редакторів.
+      leaves=("${(@)leaves:#Service Worker}")
+      ;;
+  esac
   local before=0 after=0 leaf target
   for leaf in "${leaves[@]}"; do
     target="$base/$leaf"
@@ -2132,7 +2144,7 @@ category_browser_caches() {
   if (( ! SCAN_ONLY )); then
     section "Browser & Electron-app caches"
     printf '  Safari, Chrome, Arc, Edge, Brave, Firefox, Slack,\n'
-    printf '  VS Code, VS Code Insiders, Cursor, Windsurf, Discord, Teams, Notion — cache subdirs only.\n'
+    printf '  VS Code, VS Code Insiders, Cursor, Windsurf, Devin, Devin - Next, Discord, Teams, Notion — лише кеші.\n'
     printf '  Cookies, history, logins, IndexedDB, and user data are NOT touched.\n'
   fi
   local before_cleaned=$CATEGORIES_CLEANED
@@ -2160,6 +2172,12 @@ category_browser_caches() {
   _browser_clean_electron windsurf "Windsurf" \
     '^/Applications/Windsurf.app/Contents/MacOS/' \
     "$HOME/Library/Application Support/Windsurf"
+  _browser_clean_electron devin "Devin" \
+    '^(/Applications|/Users/[^/]+/Applications)/Devin\.app/Contents/' \
+    "$HOME/Library/Application Support/Devin"
+  _browser_clean_electron devin_next "Devin - Next" \
+    '^(/Applications|/Users/[^/]+/Applications)/Devin - Next\.app/Contents/' \
+    "$HOME/Library/Application Support/Devin - Next"
   _browser_clean_electron discord "Discord" \
     '^/Applications/Discord.app/Contents/MacOS/' \
     "$HOME/Library/Application Support/discord"

@@ -1,0 +1,70 @@
+$ ./mac-cleaner.sh --dry-run --yes --only browsers </dev/null
+mac-cleaner — interactive macOS developer-cache cleaner   run 780ecec2
+  How it works: walks each cache, shows its size, asks y/N — y cleans, anything else skips.
+  Flags: --scan | --only <cats> | --skip <cats> | --list | --dry-run | --yes | --prepare-for-pnpm | --help
+  Log:   /Users/lion/.mac-cleaner.log
+  Abort: Ctrl-C at any prompt. Xcode Archives & iOS backups have a second DELETE confirm.
+  (dry-run: nothing will be deleted)
+  (--yes: prompts auto-accepted; Xcode Archives & iOS backups still double-prompt; sudo & npm upgrades still ask)
+  (--only: browsers)
+
+── Browser & Electron-app caches ──────────────────────────────
+  Safari, Chrome, Arc, Edge, Brave, Firefox, Slack,
+  VS Code, VS Code Insiders, Cursor, Windsurf, Devin, Devin - Next, Discord, Teams, Notion — лише кеші.
+  Cookies, history, logins, IndexedDB, and user data are NOT touched.
+  chrome is running, skipping its caches.
+  Firefox is running, skipping its caches.
+  Slack — size: 1,01 GB
+  Clean Slack caches? [y/N] y (auto)
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application\ Support/Slack/Cache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application\ Support/Slack/Code\ Cache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application\ Support/Slack/GPUCache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application\ Support/Slack/Service\ Worker
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application\ Support/Slack/DawnGraphiteCache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application\ Support/Slack/DawnWebGPUCache
+  → Slack freed 0 B
+  VS Code — size: 374,57 MB
+  Clean VS Code caches? [y/N] y (auto)
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Code/CachedExtensionVSIXs
+  → VS Code freed 0 B
+  Cursor — size: 63,29 MB
+  Clean Cursor caches? [y/N] y (auto)
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Cursor/Cache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Cursor/Code\ Cache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Cursor/GPUCache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Cursor/DawnGraphiteCache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Cursor/DawnWebGPUCache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Cursor/CachedData
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Cursor/CachedExtensionVSIXs
+  → Cursor freed 0 B
+  Windsurf — size: 86,20 MB
+  Clean Windsurf caches? [y/N] y (auto)
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Windsurf/CachedExtensionVSIXs
+  → Windsurf freed 0 B
+  Devin — size: 1,16 GB
+  Clean Devin caches? [y/N] y (auto)
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Devin/Cache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Devin/Code\ Cache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Devin/GPUCache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Devin/DawnGraphiteCache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Devin/DawnWebGPUCache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Devin/CachedData
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Devin/CachedExtensionVSIXs
+  → Devin freed 0 B
+  Devin - Next — size: 486,24 MB
+  Clean Devin - Next caches? [y/N] y (auto)
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Devin\ -\ Next/Cache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Devin\ -\ Next/Code\ Cache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Devin\ -\ Next/GPUCache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Devin\ -\ Next/DawnGraphiteCache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Devin\ -\ Next/DawnWebGPUCache
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Devin\ -\ Next/CachedData
+  [dry-run] zsh -c rm -rf /Users/lion/Library/Application\ Support/Devin\ -\ Next/CachedExtensionVSIXs
+  → Devin - Next freed 0 B
+  Microsoft Teams is running, skipping its caches.
+
+── Summary ────────────────────
+  Freed 0 B across 0 categories
+  Log:  /Users/lion/.mac-cleaner.log
+
+exit: 0

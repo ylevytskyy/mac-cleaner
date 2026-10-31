@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "command": "git diff --check && bash /Users/lion/.claude/skills/security-review/scripts/security-check.sh --base main",
+  "cwd": "/Users/lion/Documents/Projects/mine/mac-cleaner-editor-caches",
+  "root": "/Users/lion/Documents/Projects/mine/mac-cleaner-editor-caches",
+  "before": "ac01b14736860a9e9553da51beb1c8a694eaefc7b7181ca7db0f1851c97e8aeb",
+  "after": "ac01b14736860a9e9553da51beb1c8a694eaefc7b7181ca7db0f1851c97e8aeb",
+  "exit_code": 0,
+  "log_sha256": "0547d2f41af20c5e1c8056ef79267bb7ce4b6d134d38097b363a7ac61bbfe87a",
+  "artifacts": {}
+}

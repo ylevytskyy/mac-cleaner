@@ -112,6 +112,16 @@ You can target specific categories or entire groups using `--only` or `--skip` w
 
 Run `./mac-cleaner.sh --list` to inspect all keys and group mappings.
 
+Категорія `browsers` також охоплює кеші **Devin і Devin - Next** та
+`CachedExtensionVSIXs` у **VS Code, VS Code Insiders, Cursor, Windsurf,
+Devin і Devin - Next**. Це завантажені архіви розширень; встановлені
+розширення залишаються на місці. Архіви за потреби завантажаться повторно.
+Перед очищенням закрийте відповідний редактор: запущені програми пропускаються.
+Для Devin зберігаються `User`, розмови, `Service Worker`, локальне сховище,
+IndexedDB та облікові дані; видаляються лише явно перелічені кеші.
+Переглянути обсяг можна командою `./mac-cleaner.sh --scan --only browsers`,
+а команди очищення — `./mac-cleaner.sh --dry-run --yes --only browsers`.
+
 For each category during an interactive run:
 
 1. Reports the cache size (skips silently if already empty / tool not installed).
