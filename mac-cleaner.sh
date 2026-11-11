@@ -451,11 +451,14 @@ run_paths_category() {
     log DECLINE "category=$logcat size_bytes=$total"
     return 0
   fi
+  local rc=0
   for p in "${paths[@]}"; do
     [[ -e "$p" ]] || continue
     rel="${p/#$HOME/~}"
-    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}" || true
+    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
+  # A failed rm is reported by run_cat (ERROR category=<key>), never as CLEAN.
+  (( rc == 0 )) || return $rc
   local after=0
   for p in "${paths[@]}"; do
     [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
@@ -491,7 +494,7 @@ cleanup_pnpm_store() {
   # v3 legacy store: pnpm 5-8 stored at ~/Library/pnpm/store/v3.
   # pnpm 9+ migrated to v10/v11; v3 is permanently unreachable.
   # Guard rail: if v3 dir exists and is NOT the active store, offer to delete it.
-  local v3="$HOME/Library/pnpm/store/v3"
+  local v3="$HOME/Library/pnpm/store/v3" rc=0
   if [[ -d "$v3" ]]; then
     local active=""
     if have pnpm; then
@@ -503,16 +506,28 @@ cleanup_pnpm_store() {
         printf '  %spnpm legacy v3 store found (orphaned by pnpm 9+):%s %s\n' \
           "$C_YELLOW" "$C_RESET" "$(human_size "$v3_size")"
         if confirm "  Remove orphaned pnpm v3 store?"; then
-          run_cmd "rm -rf ~/Library/pnpm/store/v3" zsh -c "rm -rf ${(q)v3}"
-          log CLEAN "category=pnpm_store action=remove_v3_orphan freed_bytes=$v3_size"
+          local v3_rc=0
+          run_cmd "rm -rf ~/Library/pnpm/store/v3" zsh -c "rm -rf ${(q)v3}" || v3_rc=$?
+          if (( v3_rc )); then
+            log ERROR "category=pnpm_store action=remove_v3_orphan rc=$v3_rc"
+            rc=$v3_rc
+          else
+            # Re-measure: under --dry-run nothing was removed, so freed is 0.
+            local v3_after=0 v3_freed
+            [[ -e "$v3" ]] && v3_after=$(du_safe "$v3")
+            v3_freed=$(( v3_size - v3_after ))
+            (( v3_freed < 0 )) && v3_freed=0
+            log CLEAN "category=pnpm_store action=remove_v3_orphan freed_bytes=$v3_freed"
+          fi
         else
           log DECLINE "category=pnpm_store action=remove_v3_orphan size_bytes=$v3_size"
         fi
       fi
     fi
   fi
-  have pnpm || { log SKIP "category=pnpm_store reason=tool_not_installed"; return 0; }
-  run_cmd "pnpm store prune" pnpm store prune
+  have pnpm || { log SKIP "category=pnpm_store reason=tool_not_installed"; return $rc; }
+  run_cmd "pnpm store prune" pnpm store prune || rc=$?
+  return $rc
 }
 
 cleanup_bun_cache() {
@@ -533,15 +548,18 @@ cleanup_deno_cache() {
 }
 
 cleanup_brew() {
+  local rc=0
   have brew || { log SKIP "category=brew reason=tool_not_installed"; return 0; }
-  run_cmd "brew cleanup -s"   brew cleanup -s
-  run_cmd "brew autoremove"   brew autoremove
+  run_cmd "brew cleanup -s"   brew cleanup -s || rc=$?
+  run_cmd "brew autoremove"   brew autoremove || rc=$?
+  return $rc
 }
 
 cleanup_npm_yarn_all_nvm() {
   # Each nvm-installed Node ships its own npm (and optionally yarn) with
   # potentially a different `cache` setting via per-version .npmrc.
   # Invoke each version's binaries so custom cache paths also get purged.
+  local rc=0
   local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
   local versions_dir="$nvm_dir/versions/node"
   local vpath vname vbin yarn_v
@@ -550,17 +568,18 @@ cleanup_npm_yarn_all_nvm() {
     vname="${vpath:t}"
     vbin="$vpath/bin"
     if [[ -x "$vbin/npm" ]]; then
-      run_cmd "($vname) npm cache clean --force" "$vbin/npm" cache clean --force
+      run_cmd "($vname) npm cache clean --force" "$vbin/npm" cache clean --force || rc=$?
     fi
     if [[ -x "$vbin/yarn" ]]; then
       yarn_v="$("$vbin/yarn" --version 2>/dev/null || echo 0)"
       if [[ "${yarn_v%%.*}" == "1" ]]; then
-        run_cmd "($vname) yarn cache clean" "$vbin/yarn" cache clean
+        run_cmd "($vname) yarn cache clean" "$vbin/yarn" cache clean || rc=$?
       else
-        run_cmd "($vname) yarn cache clean --all" "$vbin/yarn" cache clean --all
+        run_cmd "($vname) yarn cache clean --all" "$vbin/yarn" cache clean --all || rc=$?
       fi
     fi
   done
+  return $rc
 }
 
 # Wrappers that call run_category with the right sizing path.
@@ -649,6 +668,7 @@ cleanup_npm_yarn_all_brew() {
   # Each brew-installed Node formula ships its own npm; corepack-shimmed yarn
   # may also live under that prefix's bin. Per-formula .npmrc may set a custom
   # cache path, so invoke each binary explicitly.
+  local rc=0
   have brew || return 0
   local formulas formula prefix vbin yarn_v
   formulas="$(brew list --formula 2>/dev/null | grep -E '^node(@[0-9.]+)?$' || true)"
@@ -659,17 +679,18 @@ cleanup_npm_yarn_all_brew() {
     [[ -n "$prefix" && -d "$prefix" ]] || continue
     vbin="$prefix/bin"
     if [[ -x "$vbin/npm" ]]; then
-      run_cmd "($formula) npm cache clean --force" "$vbin/npm" cache clean --force
+      run_cmd "($formula) npm cache clean --force" "$vbin/npm" cache clean --force || rc=$?
     fi
     if [[ -x "$vbin/yarn" ]]; then
       yarn_v="$("$vbin/yarn" --version 2>/dev/null || echo 0)"
       if [[ "${yarn_v%%.*}" == "1" ]]; then
-        run_cmd "($formula) yarn cache clean" "$vbin/yarn" cache clean
+        run_cmd "($formula) yarn cache clean" "$vbin/yarn" cache clean || rc=$?
       else
-        run_cmd "($formula) yarn cache clean --all" "$vbin/yarn" cache clean --all
+        run_cmd "($formula) yarn cache clean --all" "$vbin/yarn" cache clean --all || rc=$?
       fi
     fi
   done <<< "$formulas"
+  return $rc
 }
 
 category_npm_yarn_all_brew() {
@@ -848,11 +869,13 @@ cleanup_android_build() {
 cleanup_expo_metro() {
   # ~/.expo is user-level state; some of it is caches, some is auth.
   # Safer: wipe the cache subdir only, not the whole ~/.expo.
+  local rc=0
   run_cmd "rm -rf ~/.expo/cache" \
-    zsh -c 'rm -rf "$HOME/.expo/cache"'
-  run_cmd "rm -rf /tmp/metro-*"      zsh -c 'rm -rf /tmp/metro-*'
-  run_cmd "rm -rf /tmp/haste-map-*"  zsh -c 'rm -rf /tmp/haste-map-*'
-  run_cmd "rm -rf /tmp/react-*"      zsh -c 'rm -rf /tmp/react-*'
+    zsh -c 'rm -rf "$HOME/.expo/cache"' || rc=$?
+  run_cmd "rm -rf /tmp/metro-*"      zsh -c 'rm -rf /tmp/metro-*' || rc=$?
+  run_cmd "rm -rf /tmp/haste-map-*"  zsh -c 'rm -rf /tmp/haste-map-*' || rc=$?
+  run_cmd "rm -rf /tmp/react-*"      zsh -c 'rm -rf /tmp/react-*' || rc=$?
+  return $rc
 }
 
 cleanup_pip_cache() {
@@ -1062,7 +1085,7 @@ category_app_caches() {
   fi
 
   # ── cleanup ────────────────────────────────────────────────────────────
-  local before="$total"
+  local before="$total" rc=0
   for child in "$CACHES_DIR"/*(N/); do
     name="${child:t}"
 
@@ -1080,13 +1103,13 @@ category_app_caches() {
           [[ -e "$as_sub" ]] || continue
           local as_name="${as_sub:t}"
           run_cmd "rm -rf ~/Library/Caches/Google/$as_name" \
-            zsh -c "rm -rf ${(q)as_sub}" || true
+            zsh -c "rm -rf ${(q)as_sub}" || rc=$?
         done
       fi
       # Always attempt Google/Chrome (browser HTTP cache, no IDE-lock concern)
       if [[ -e "$child/Chrome" ]]; then
         run_cmd "rm -rf ~/Library/Caches/Google/Chrome" \
-          zsh -c "rm -rf ${(q)child}/Chrome" || true
+          zsh -c "rm -rf ${(q)child}/Chrome" || rc=$?
       fi
       # Any other Google/ child defaults to DENY — do nothing
       continue
@@ -1098,8 +1121,10 @@ category_app_caches() {
     fi
 
     run_cmd "rm -rf ~/Library/Caches/$name" \
-      zsh -c "rm -rf ${(q)child}" || true
+      zsh -c "rm -rf ${(q)child}" || rc=$?
   done
+
+  (( rc == 0 )) || return $rc
 
   # ── measure freed ─────────────────────────────────────────────────────
   local after=0
@@ -1364,10 +1389,12 @@ category_coresimulator_logs() {
 }
 
 cleanup_xctest_xcpg_devices() {
+  local rc=0
   run_cmd "rm -rf ~/Library/Developer/XCTestDevices/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/XCTestDevices/"*'
+    zsh -c 'rm -rf "$HOME/Library/Developer/XCTestDevices/"*' || rc=$?
   run_cmd "rm -rf ~/Library/Developer/XCPGDevices/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/XCPGDevices/"*'
+    zsh -c 'rm -rf "$HOME/Library/Developer/XCPGDevices/"*' || rc=$?
+  return $rc
 }
 category_xctest_xcpg_devices() {
   local total=0 p
@@ -1474,10 +1501,12 @@ category_ccache() {
 }
 
 cleanup_cargo_registry() {
+  local rc=0
   run_cmd "rm -rf ~/.cargo/registry/cache" \
-    zsh -c 'rm -rf "$HOME/.cargo/registry/cache"'
+    zsh -c 'rm -rf "$HOME/.cargo/registry/cache"' || rc=$?
   run_cmd "rm -rf ~/.cargo/registry/src" \
-    zsh -c 'rm -rf "$HOME/.cargo/registry/src"'
+    zsh -c 'rm -rf "$HOME/.cargo/registry/src"' || rc=$?
+  return $rc
 }
 category_cargo_registry() {
   local total=0 p
@@ -1519,9 +1548,11 @@ category_cargo_registry() {
 }
 
 cleanup_go_caches() {
+  local rc=0
   have go || { log SKIP "category=go_caches reason=tool_not_installed"; return 0; }
-  run_cmd "go clean -modcache" go clean -modcache
-  run_cmd "go clean -cache"    go clean -cache
+  run_cmd "go clean -modcache" go clean -modcache || rc=$?
+  run_cmd "go clean -cache"    go clean -cache || rc=$?
+  return $rc
 }
 category_go_caches() {
   if ! have go; then
@@ -1665,7 +1696,7 @@ category_bazel() {
     log DECLINE "category=bazel size_bytes=$total"
     return 0
   fi
-  cleanup_bazel || { log ERROR "category=bazel rc=$?"; }
+  cleanup_bazel || { log ERROR "category=bazel rc=$?"; return 0; }
   local after=0
   for p in "/private/var/tmp/_bazel_${USER:-$(id -un)}" "$HOME/Library/Caches/bazel"; do
     [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
@@ -2248,18 +2279,20 @@ category_mail_downloads() {
 }
 
 cleanup_diagnostic_reports() {
+  local rc=0
   run_cmd "rm -rf ~/Library/Logs/DiagnosticReports/Retired" \
-    zsh -c 'rm -rf "$HOME/Library/Logs/DiagnosticReports/Retired"'
+    zsh -c 'rm -rf "$HOME/Library/Logs/DiagnosticReports/Retired"' || rc=$?
   run_cmd "rm -f ~/Library/Logs/DiagnosticReports/*.ips ~/Library/Logs/DiagnosticReports/*.diag" \
-    zsh -c 'rm -f "$HOME/Library/Logs/DiagnosticReports/"*.ips(N) "$HOME/Library/Logs/DiagnosticReports/"*.diag(N)'
+    zsh -c 'rm -f "$HOME/Library/Logs/DiagnosticReports/"*.ips(N) "$HOME/Library/Logs/DiagnosticReports/"*.diag(N)' || rc=$?
   if id -Gn | tr ' ' '\n' | grep -qx _analyticsusers; then
     run_cmd "rm -rf /Library/Logs/DiagnosticReports/Retired" \
-      zsh -c 'rm -rf /Library/Logs/DiagnosticReports/Retired'
+      zsh -c 'rm -rf /Library/Logs/DiagnosticReports/Retired' || rc=$?
     run_cmd "rm -f /Library/Logs/DiagnosticReports/*.ips /Library/Logs/DiagnosticReports/*.diag" \
-      zsh -c 'rm -f /Library/Logs/DiagnosticReports/*.ips(N) /Library/Logs/DiagnosticReports/*.diag(N)'
+      zsh -c 'rm -f /Library/Logs/DiagnosticReports/*.ips(N) /Library/Logs/DiagnosticReports/*.diag(N)' || rc=$?
   else
     log SKIP "category=diagnostic_reports reason=insufficient_perms group=_analyticsusers path=/Library/Logs/DiagnosticReports"
   fi
+  return $rc
 }
 category_diagnostic_reports() {
   local total=0 p
@@ -2308,10 +2341,12 @@ category_diagnostic_reports() {
 # fail when products are uninstalled before next-version upgrade).
 
 cleanup_android_studio_logs() {
+  local rc=0
   run_cmd "rm -rf ~/Library/Logs/Google" \
-    zsh -c 'rm -rf "$HOME/Library/Logs/Google"'
+    zsh -c 'rm -rf "$HOME/Library/Logs/Google"' || rc=$?
   run_cmd "rm -rf ~/Library/Logs/JetBrains" \
-    zsh -c 'rm -rf "$HOME/Library/Logs/JetBrains"'
+    zsh -c 'rm -rf "$HOME/Library/Logs/JetBrains"' || rc=$?
+  return $rc
 }
 
 category_android_studio_logs() {
