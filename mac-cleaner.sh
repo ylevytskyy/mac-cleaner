@@ -278,16 +278,17 @@ confirm_explicit() {
 
 run_cmd() {
   # run_cmd <desc> <cmd...>  — respects DRY_RUN, returns cmd's rc
+  # local_options restores the caller's errexit state on return. A bare
+  # `set -e` here would re-arm errexit inside run_cat's `set +e` region, and
+  # the next failing call would then abort the whole run.
+  setopt local_options no_err_exit
   local desc="$1"; shift
   if (( DRY_RUN )); then
     printf '  %s[dry-run]%s %s\n' "$C_DIM" "$C_RESET" "$*"
     return 0
   fi
-  # Relax -e briefly so we can keep going on per-category failures.
-  set +e
   "$@"
   local rc=$?
-  set -e
   # Real deletion commands may invalidate cached sizes
   DU_CACHE=()
   return $rc
@@ -1290,7 +1291,7 @@ category_dev_dotcaches() {
     return 0
   fi
 
-  local before="$total"
+  local before="$total" rc=0
   for p in "${DEV_DOTCACHE_PATHS[@]}"; do
     if [[ ! -e "$p" ]]; then
       # Strip $HOME prefix for a readable relative path in the log
@@ -1299,8 +1300,9 @@ category_dev_dotcaches() {
       continue
     fi
     local rel="${p#$HOME/}"
-    run_cmd "rm -rf ~/$rel" zsh -c "rm -rf ${(q)p}"
+    run_cmd "rm -rf ~/$rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
+  (( rc == 0 )) || return $rc
 
   local after=0
   for p in "${DEV_DOTCACHE_PATHS[@]}"; do
@@ -1730,7 +1732,7 @@ category_container_vms() {
         "$C_DIM" "$C_RESET"
     fi
   fi
-  local any=0
+  local any=0 rc=0
 
   if have docker && docker info >/dev/null 2>&1; then
     any=1
@@ -1774,13 +1776,19 @@ category_container_vms() {
           SCAN_TOTAL=$(( SCAN_TOTAL + col_sz ))
           SCAN_COUNT=$(( SCAN_COUNT + 1 ))
         elif confirm "Clean Colima download cache (~/.colima/_cache)?"; then
-          run_cmd "rm -rf ~/.colima/_cache/*" zsh -c 'rm -rf "$HOME/.colima/_cache/"*'
-          local col_after=$(du_safe "$HOME/.colima/_cache")
-          local col_freed=$(( col_sz - col_after ))
-          (( col_freed < 0 )) && col_freed=0
-          TOTAL_FREED=$(( TOTAL_FREED + col_freed ))
-          printf '  %s→ Colima cache cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$col_freed")" "$C_RESET"
-          log CLEAN "category=container_vms tool=colima_cache freed_bytes=$col_freed"
+          local col_rc=0
+          run_cmd "rm -rf ~/.colima/_cache/*" zsh -c 'rm -rf "$HOME/.colima/_cache/"*' || col_rc=$?
+          if (( col_rc )); then
+            log ERROR "category=container_vms tool=colima_cache rc=$col_rc"
+            rc=$col_rc
+          else
+            local col_after=$(du_safe "$HOME/.colima/_cache")
+            local col_freed=$(( col_sz - col_after ))
+            (( col_freed < 0 )) && col_freed=0
+            TOTAL_FREED=$(( TOTAL_FREED + col_freed ))
+            printf '  %s→ Colima cache cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$col_freed")" "$C_RESET"
+            log CLEAN "category=container_vms tool=colima_cache freed_bytes=$col_freed"
+          fi
         fi
       fi
     fi
@@ -1822,7 +1830,7 @@ category_container_vms() {
   if (( ! SCAN_ONLY && any == 0 )); then
     printf '  %sno container tools installed, skipping%s\n' "$C_DIM" "$C_RESET"
   fi
-  return 0
+  return $rc
 }
 
 # ── Browser caches (Tier 2) ──
@@ -1888,18 +1896,20 @@ _browser_clean_chromium() {
     log DECLINE "category=browser_caches browser=$key size_bytes=$before"
     return 0
   fi
+  local rc=0
   for prof in "$udir"/Default(N/) "$udir"/Profile\ *(N/); do
     for leaf in "${leaves[@]}"; do
       target="$prof/$leaf"
       [[ -e "$target" ]] || continue
-      run_cmd "rm -rf <profile>/$leaf" zsh -c "rm -rf ${(q)target}"
+      run_cmd "rm -rf <profile>/$leaf" zsh -c "rm -rf ${(q)target}" || rc=$?
     done
   done
   for leaf in "${top_leaves[@]}"; do
     target="$udir/$leaf"
     [[ -e "$target" ]] || continue
-    run_cmd "rm -rf <browser>/$leaf" zsh -c "rm -rf ${(q)target}"
+    run_cmd "rm -rf <browser>/$leaf" zsh -c "rm -rf ${(q)target}" || rc=$?
   done
+  (( rc == 0 )) || { log ERROR "category=browser_caches browser=$key rc=$rc"; return $rc; }
   for prof in "$udir"/Default(N/) "$udir"/Profile\ *(N/); do
     for leaf in "${leaves[@]}"; do
       target="$prof/$leaf"
@@ -1945,7 +1955,9 @@ _browser_clean_safari() {
     log DECLINE "category=browser_caches browser=safari size_bytes=$before"
     return 0
   fi
-  run_cmd "rm -rf <safari cache>/*" zsh -c "rm -rf ${(q)cdir}/*"
+  local rc=0
+  run_cmd "rm -rf <safari cache>/*" zsh -c "rm -rf ${(q)cdir}/*" || rc=$?
+  (( rc == 0 )) || { log ERROR "category=browser_caches browser=safari rc=$rc"; return $rc; }
   local after; after=$(du_safe "$cdir")
   local freed=$(( before - after ))
   (( freed < 0 )) && freed=0
@@ -1989,13 +2001,15 @@ _browser_clean_firefox() {
     log DECLINE "category=browser_caches browser=firefox size_bytes=$before"
     return 0
   fi
+  local rc=0
   for prof in "$root"/*.default-release(N/) "$root"/*.default(N/) "$root"/*.dev-edition-default(N/); do
     for leaf in "${ff_leaves[@]}"; do
       target="$prof/$leaf"
       [[ -e "$target" ]] || continue
-      run_cmd "rm -rf <profile>/$leaf" zsh -c "rm -rf ${(q)target}"
+      run_cmd "rm -rf <profile>/$leaf" zsh -c "rm -rf ${(q)target}" || rc=$?
     done
   done
+  (( rc == 0 )) || { log ERROR "category=browser_caches browser=firefox rc=$rc"; return $rc; }
   for prof in "$root"/*.default-release(N/) "$root"/*.default(N/) "$root"/*.dev-edition-default(N/); do
     for leaf in "${ff_leaves[@]}"; do
       target="$prof/$leaf"
@@ -2066,11 +2080,13 @@ _browser_clean_electron() {
     log DECLINE "category=browser_caches browser=$slug size_bytes=$before"
     return 0
   fi
+  local rc=0
   for leaf in "${leaves[@]}"; do
     target="$base/$leaf"
     [[ -e "$target" ]] || continue
-    run_cmd "rm -rf <$slug>/$leaf" zsh -c "rm -rf ${(q)target}"
+    run_cmd "rm -rf <$slug>/$leaf" zsh -c "rm -rf ${(q)target}" || rc=$?
   done
+  (( rc == 0 )) || { log ERROR "category=browser_caches browser=$slug rc=$rc"; return $rc; }
   for leaf in "${leaves[@]}"; do
     target="$base/$leaf"
     [[ -e "$target" ]] && after=$(( after + $(du_safe "$target") ))
@@ -2124,11 +2140,13 @@ _browser_clean_slack() {
     log DECLINE "category=browser_caches browser=slack size_bytes=$before"
     return 0
   fi
+  local rc=0
   for leaf in "${leaves[@]}"; do
     target="$base/$leaf"
     [[ -e "$target" ]] || continue
-    run_cmd "rm -rf <slack>/$leaf" zsh -c "rm -rf ${(q)target}"
+    run_cmd "rm -rf <slack>/$leaf" zsh -c "rm -rf ${(q)target}" || rc=$?
   done
+  (( rc == 0 )) || { log ERROR "category=browser_caches browser=slack rc=$rc"; return $rc; }
   for leaf in "${leaves[@]}"; do
     target="$base/$leaf"
     [[ -e "$target" ]] && after=$(( after + $(du_safe "$target") ))
@@ -2149,48 +2167,50 @@ category_browser_caches() {
   fi
   local before_cleaned=$CATEGORIES_CLEANED
   local before_freed=$TOTAL_FREED
-  _browser_clean_safari
+  local rc=0
+  _browser_clean_safari || rc=$?
   _browser_clean_chromium chrome '^/Applications/Google Chrome.app/Contents/MacOS/' \
-    "$HOME/Library/Application Support/Google/Chrome"
+    "$HOME/Library/Application Support/Google/Chrome" || rc=$?
   _browser_clean_chromium arc '^/Applications/Arc.app/Contents/MacOS/' \
-    "$HOME/Library/Application Support/Arc/User Data"
+    "$HOME/Library/Application Support/Arc/User Data" || rc=$?
   _browser_clean_chromium edge '^/Applications/Microsoft Edge.app/Contents/MacOS/' \
-    "$HOME/Library/Application Support/Microsoft Edge"
+    "$HOME/Library/Application Support/Microsoft Edge" || rc=$?
   _browser_clean_chromium brave '^/Applications/Brave Browser.app/Contents/MacOS/' \
-    "$HOME/Library/Application Support/BraveSoftware/Brave-Browser"
-  _browser_clean_firefox
-  _browser_clean_slack
+    "$HOME/Library/Application Support/BraveSoftware/Brave-Browser" || rc=$?
+  _browser_clean_firefox || rc=$?
+  _browser_clean_slack || rc=$?
   _browser_clean_electron vscode "VS Code" \
     '^/Applications/Visual Studio Code.app/Contents/MacOS/' \
-    "$HOME/Library/Application Support/Code"
+    "$HOME/Library/Application Support/Code" || rc=$?
   _browser_clean_electron vscode_insiders "VS Code Insiders" \
     '^/Applications/Visual Studio Code - Insiders.app/Contents/MacOS/' \
-    "$HOME/Library/Application Support/Code - Insiders"
+    "$HOME/Library/Application Support/Code - Insiders" || rc=$?
   _browser_clean_electron cursor "Cursor" \
     '^/Applications/Cursor.app/Contents/MacOS/' \
-    "$HOME/Library/Application Support/Cursor"
+    "$HOME/Library/Application Support/Cursor" || rc=$?
   _browser_clean_electron windsurf "Windsurf" \
     '^/Applications/Windsurf.app/Contents/MacOS/' \
-    "$HOME/Library/Application Support/Windsurf"
+    "$HOME/Library/Application Support/Windsurf" || rc=$?
   _browser_clean_electron devin "Devin" \
     '^(/Applications|/Users/[^/]+/Applications)/Devin\.app/Contents/' \
-    "$HOME/Library/Application Support/Devin"
+    "$HOME/Library/Application Support/Devin" || rc=$?
   _browser_clean_electron devin_next "Devin - Next" \
     '^(/Applications|/Users/[^/]+/Applications)/Devin - Next\.app/Contents/' \
-    "$HOME/Library/Application Support/Devin - Next"
+    "$HOME/Library/Application Support/Devin - Next" || rc=$?
   _browser_clean_electron discord "Discord" \
     '^/Applications/Discord.app/Contents/MacOS/' \
-    "$HOME/Library/Application Support/discord"
+    "$HOME/Library/Application Support/discord" || rc=$?
   _browser_clean_electron teams "Microsoft Teams" \
     '^/Applications/Microsoft Teams.app/Contents/MacOS/' \
-    "$HOME/Library/Application Support/Microsoft/Teams"
+    "$HOME/Library/Application Support/Microsoft/Teams" || rc=$?
   _browser_clean_electron notion "Notion" \
     '^/Applications/Notion.app/Contents/MacOS/' \
-    "$HOME/Library/Application Support/Notion"
+    "$HOME/Library/Application Support/Notion" || rc=$?
   # Count this category as cleaned if any sub-browser produced freed bytes.
   if (( TOTAL_FREED > before_freed )); then
     CATEGORIES_CLEANED=$(( before_cleaned + 1 ))
   fi
+  return $rc
 }
 
 # ── User-app additions ──
@@ -2400,8 +2420,10 @@ category_wallpaper_aerials() {
     log DECLINE "category=wallpaper_aerials size_bytes=$total"
     return 0
   fi
-  run_cmd "rm -rf <aerials>/videos" zsh -c "rm -rf ${(q)videos}"
-  run_cmd "rm -rf <aerials>/thumbnails" zsh -c "rm -rf ${(q)thumbs}"
+  local rc=0
+  run_cmd "rm -rf <aerials>/videos" zsh -c "rm -rf ${(q)videos}" || rc=$?
+  run_cmd "rm -rf <aerials>/thumbnails" zsh -c "rm -rf ${(q)thumbs}" || rc=$?
+  (( rc == 0 )) || return $rc
   local after=0
   [[ -e "$videos" ]] && after=$(( after + $(du_safe "$videos") ))
   [[ -e "$thumbs" ]] && after=$(( after + $(du_safe "$thumbs") ))
@@ -2536,11 +2558,13 @@ category_python_extras() {
     log DECLINE "category=python_extras size_bytes=$total"
     return 0
   fi
+  local rc=0
   for p in "${PATHS[@]}"; do
     [[ -e "$p" ]] || continue
     rel="${p/#$HOME/~}"
-    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}"
+    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
+  (( rc == 0 )) || return $rc
   local after=0
   for p in "${PATHS[@]}"; do
     [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
@@ -2583,11 +2607,13 @@ category_node_extras() {
     log DECLINE "category=node_extras size_bytes=$total"
     return 0
   fi
+  local rc=0
   for p in "${PATHS[@]}"; do
     [[ -e "$p" ]] || continue
     rel="${p/#$HOME/~}"
-    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}"
+    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
+  (( rc == 0 )) || return $rc
   local after=0
   for p in "${PATHS[@]}"; do
     [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
@@ -2682,11 +2708,13 @@ category_llm_caches() {
     return 0
   fi
 
+  local rc=0
   for p in "${LLM_PATHS[@]}"; do
     [[ -e "$p" ]] || continue
     rel="${p/#$HOME/~}"
-    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}"
+    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
+  (( rc == 0 )) || return $rc
 
   local after=0
   for p in "${LLM_PATHS[@]}"; do
@@ -2727,7 +2755,7 @@ category_macos_installers() {
   fi
   section "Stale macOS installers"
   printf '  /Applications/Install macOS *.app — 12-15 GB stub installers\n'
-  local app name size before=0 after_total=0 cat_freed=0 any=0
+  local app name size before=0 after_total=0 cat_freed=0 any=0 rc=0 one_rc
   for app in "${installers[@]}"; do
     # Paranoid re-check that the path matches the literal pattern
     [[ "$app" == /Applications/Install\ macOS\ *.app ]] || continue
@@ -2737,7 +2765,13 @@ category_macos_installers() {
     printf '  %s%s%s — %s%s%s\n' "$C_BOLD" "$name" "$C_RESET" \
       "$C_YELLOW" "$(human_size "$size")" "$C_RESET"
     if confirm "Delete \"$name\"?"; then
-      run_cmd "rm -rf /Applications/$name" zsh -c "rm -rf ${(q)app}"
+      one_rc=0
+      run_cmd "rm -rf /Applications/$name" zsh -c "rm -rf ${(q)app}" || one_rc=$?
+      if (( one_rc )); then
+        log ERROR "category=macos_installers app=\"$name\" rc=$one_rc"
+        rc=$one_rc
+        continue
+      fi
       local after_one=0
       [[ -e "$app" ]] && after_one=$(du_safe "$app")
       local one_freed=$(( size - after_one ))
@@ -2754,6 +2788,7 @@ category_macos_installers() {
     CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
     printf '  %s→ removed installers, freed %s%s\n' "$C_GREEN" "$(human_size "$cat_freed")" "$C_RESET"
   fi
+  return $rc
 }
 
 # ── version audit ────────────────────────────────────────
@@ -2775,7 +2810,7 @@ npm_latest() {
 
 check_tool_versions() {
   section "Tool versions"
-  local tool current latest cmp
+  local tool current latest cmp rc=0 up_rc
   for tool in npm yarn pnpm; do
     have "$tool" || { printf '  %-6s %s(not installed)%s\n' "$tool" "$C_DIM" "$C_RESET"; continue; }
     current="$("$tool" --version 2>/dev/null | head -1)"
@@ -2788,8 +2823,14 @@ check_tool_versions() {
     if [[ "$cmp" == "-1" ]]; then
       printf '  %-6s %s%s%s → latest %s%s%s\n' "$tool" "$C_YELLOW" "$current" "$C_RESET" "$C_GREEN" "$latest" "$C_RESET"
       if confirm_explicit "Update $tool to $latest?"; then
-        run_cmd "npm i -g $tool@latest" npm i -g "$tool@latest"
-        log UPDATE "tool=$tool from=$current to=$latest"
+        up_rc=0
+        run_cmd "npm i -g $tool@latest" npm i -g "$tool@latest" || up_rc=$?
+        if (( up_rc )); then
+          log ERROR "tool=$tool stage=update rc=$up_rc"
+          rc=$up_rc
+        else
+          log UPDATE "tool=$tool from=$current to=$latest"
+        fi
       else
         log DECLINE "tool=$tool stage=update current=$current latest=$latest"
       fi
@@ -2804,6 +2845,7 @@ check_tool_versions() {
     printf '  %-6s %s %s(report-only; upgrade via nvm/brew/installer)%s\n' "node" "$current" "$C_DIM" "$C_RESET"
     log INFO "tool=node current=$current"
   fi
+  return $rc
 }
 
 check_outdated_globals() {
@@ -2817,7 +2859,7 @@ check_outdated_globals() {
     return 0
   fi
   # --parseable format: path:pkg@wanted:pkg@current:pkg@latest:global
-  local line pkg current latest f3 f4
+  local line pkg current latest f3 f4 rc=0 up_rc
   while IFS= read -r line; do
     f3="$(echo "$line" | awk -F: '{print $3}')"
     f4="$(echo "$line" | awk -F: '{print $4}')"
@@ -2826,12 +2868,19 @@ check_outdated_globals() {
     latest="${f4##*@}"
     printf '  %-30s %s%s%s → %s%s%s\n' "$pkg" "$C_YELLOW" "$current" "$C_RESET" "$C_GREEN" "$latest" "$C_RESET"
     if confirm_explicit "Update $pkg to $latest?"; then
-      run_cmd "npm i -g ${pkg}@latest" npm i -g "${pkg}@latest"
-      log UPDATE "pkg=$pkg from=$current to=$latest"
+      up_rc=0
+      run_cmd "npm i -g ${pkg}@latest" npm i -g "${pkg}@latest" || up_rc=$?
+      if (( up_rc )); then
+        log ERROR "pkg=$pkg stage=update rc=$up_rc"
+        rc=$up_rc
+      else
+        log UPDATE "pkg=$pkg from=$current to=$latest"
+      fi
     else
       log DECLINE "pkg=$pkg stage=update current=$current latest=$latest"
     fi
   done <<< "$out"
+  return $rc
 }
 
 # ── 2026-05-30 additions: Tier-1 caches + opt-in user-data/maintenance ──
@@ -3036,18 +3085,32 @@ category_system_maintenance() {
     log DECLINE "category=system_maintenance"
     return 0
   fi
+  local rc=0 step_rc
   if have purge; then
-    run_cmd "sudo purge" sudo purge
-    log INFO "category=system_maintenance step=purge"
+    step_rc=0
+    run_cmd "sudo purge" sudo purge || step_rc=$?
+    if (( step_rc )); then
+      log ERROR "category=system_maintenance step=purge rc=$step_rc"
+      rc=$step_rc
+    else
+      log INFO "category=system_maintenance step=purge"
+    fi
   else
     log SKIP "category=system_maintenance step=purge reason=tool_not_installed"
   fi
   if have mdutil; then
-    run_cmd "sudo mdutil -E /" sudo mdutil -E /
-    log INFO "category=system_maintenance step=mdutil"
+    step_rc=0
+    run_cmd "sudo mdutil -E /" sudo mdutil -E / || step_rc=$?
+    if (( step_rc )); then
+      log ERROR "category=system_maintenance step=mdutil rc=$step_rc"
+      rc=$step_rc
+    else
+      log INFO "category=system_maintenance step=mdutil"
+    fi
   else
     log SKIP "category=system_maintenance step=mdutil reason=tool_not_installed"
   fi
+  (( rc == 0 )) || return $rc
   printf '  %s→ maintenance complete (no disk reclaimed)%s\n' "$C_GREEN" "$C_RESET"
 }
 
