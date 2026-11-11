@@ -744,12 +744,12 @@ category_npm_yarn_all_brew() {
 
 cleanup_xcode_derived() {
   run_cmd "rm -rf ~/Library/Developer/Xcode/DerivedData/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/Xcode/DerivedData/"*'
+    zsh -c 'rm -rf "$HOME/Library/Developer/Xcode/DerivedData/"*(DN)'
 }
 
 cleanup_xcode_archives() {
   run_cmd "rm -rf ~/Library/Developer/Xcode/Archives/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/Xcode/Archives/"*'
+    zsh -c 'rm -rf "$HOME/Library/Developer/Xcode/Archives/"*(DN)'
 }
 
 cleanup_ios_sim() {
@@ -872,9 +872,9 @@ cleanup_expo_metro() {
   local rc=0
   run_cmd "rm -rf ~/.expo/cache" \
     zsh -c 'rm -rf "$HOME/.expo/cache"' || rc=$?
-  run_cmd "rm -rf /tmp/metro-*"      zsh -c 'rm -rf /tmp/metro-*' || rc=$?
-  run_cmd "rm -rf /tmp/haste-map-*"  zsh -c 'rm -rf /tmp/haste-map-*' || rc=$?
-  run_cmd "rm -rf /tmp/react-*"      zsh -c 'rm -rf /tmp/react-*' || rc=$?
+  run_cmd "rm -rf /tmp/metro-*"      zsh -c 'rm -rf /tmp/metro-*(N)' || rc=$?
+  run_cmd "rm -rf /tmp/haste-map-*"  zsh -c 'rm -rf /tmp/haste-map-*(N)' || rc=$?
+  run_cmd "rm -rf /tmp/react-*"      zsh -c 'rm -rf /tmp/react-*(N)' || rc=$?
   return $rc
 }
 
@@ -889,7 +889,7 @@ cleanup_pip_cache() {
 
 cleanup_trash() {
   run_cmd "rm -rf ~/.Trash/*" \
-    zsh -c 'rm -rf "$HOME/.Trash/"*'
+    zsh -c 'rm -rf "$HOME/.Trash/"*(DN)'
 }
 
 category_gradle() {
@@ -1358,7 +1358,7 @@ cleanup_coresimulator_caches() {
   have xcrun && run_cmd "xcrun simctl shutdown all (best-effort)" \
     xcrun simctl shutdown all || true
   run_cmd "rm -rf ~/Library/Developer/CoreSimulator/Caches/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/CoreSimulator/Caches/"*'
+    zsh -c 'rm -rf "$HOME/Library/Developer/CoreSimulator/Caches/"*(DN)'
 }
 category_coresimulator_caches() {
   if (( ! SCAN_ONLY )) && pgrep -x Simulator >/dev/null 2>&1; then
@@ -1374,7 +1374,7 @@ category_coresimulator_caches() {
 
 cleanup_coresimulator_logs() {
   run_cmd "rm -rf ~/Library/Logs/CoreSimulator/*" \
-    zsh -c 'rm -rf "$HOME/Library/Logs/CoreSimulator/"*'
+    zsh -c 'rm -rf "$HOME/Library/Logs/CoreSimulator/"*(DN)'
 }
 category_coresimulator_logs() {
   if (( ! SCAN_ONLY )) && pgrep -x Simulator >/dev/null 2>&1; then
@@ -1391,9 +1391,9 @@ category_coresimulator_logs() {
 cleanup_xctest_xcpg_devices() {
   local rc=0
   run_cmd "rm -rf ~/Library/Developer/XCTestDevices/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/XCTestDevices/"*' || rc=$?
+    zsh -c 'rm -rf "$HOME/Library/Developer/XCTestDevices/"*(DN)' || rc=$?
   run_cmd "rm -rf ~/Library/Developer/XCPGDevices/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/XCPGDevices/"*' || rc=$?
+    zsh -c 'rm -rf "$HOME/Library/Developer/XCPGDevices/"*(DN)' || rc=$?
   return $rc
 }
 category_xctest_xcpg_devices() {
@@ -1443,7 +1443,7 @@ category_xctest_xcpg_devices() {
 
 cleanup_xcode_dt_cache() {
   run_cmd "rm -rf ~/Library/Caches/com.apple.dt.Xcode/*" \
-    zsh -c 'rm -rf "$HOME/Library/Caches/com.apple.dt.Xcode/"*'
+    zsh -c 'rm -rf "$HOME/Library/Caches/com.apple.dt.Xcode/"*(DN)'
 }
 category_xcode_dt_cache() {
   if (( ! SCAN_ONLY )) && pgrep -x Xcode >/dev/null 2>&1; then
@@ -1459,7 +1459,7 @@ category_xcode_dt_cache() {
 
 cleanup_xcode_device_logs() {
   run_cmd "rm -rf ~/Library/Developer/Xcode/DeviceLogs/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/Xcode/DeviceLogs/"*'
+    zsh -c 'rm -rf "$HOME/Library/Developer/Xcode/DeviceLogs/"*(DN)'
 }
 category_xcode_device_logs() {
   run_category "Xcode iOS device logs" \
@@ -1808,7 +1808,7 @@ category_container_vms() {
           SCAN_COUNT=$(( SCAN_COUNT + 1 ))
         elif confirm "Clean Colima download cache (~/.colima/_cache)?"; then
           local col_rc=0
-          run_cmd "rm -rf ~/.colima/_cache/*" zsh -c 'rm -rf "$HOME/.colima/_cache/"*' || col_rc=$?
+          run_cmd "rm -rf ~/.colima/_cache/*" zsh -c 'rm -rf "$HOME/.colima/_cache/"*(DN)' || col_rc=$?
           if (( col_rc )); then
             log ERROR "category=container_vms tool=colima_cache rc=$col_rc"
             rc=$col_rc
@@ -1987,7 +1987,7 @@ _browser_clean_safari() {
     return 0
   fi
   local rc=0
-  run_cmd "rm -rf <safari cache>/*" zsh -c "rm -rf ${(q)cdir}/*" || rc=$?
+  run_cmd "rm -rf <safari cache>/*" zsh -c "rm -rf ${(q)cdir}/*(DN)" || rc=$?
   (( rc == 0 )) || { log ERROR "category=browser_caches browser=safari rc=$rc"; return $rc; }
   local after; after=$(du_safe "$cdir")
   local freed=$(( before - after ))
@@ -2248,7 +2248,7 @@ category_browser_caches() {
 
 cleanup_apple_music_stream_cache() {
   run_cmd "rm -rf ~/Library/Caches/com.apple.Music/*" \
-    zsh -c 'rm -rf "$HOME/Library/Caches/com.apple.Music/"*'
+    zsh -c 'rm -rf "$HOME/Library/Caches/com.apple.Music/"*(DN)'
 }
 category_apple_music_stream_cache() {
   if (( ! SCAN_ONLY )) && pgrep -x Music >/dev/null 2>&1; then
@@ -2264,7 +2264,7 @@ category_apple_music_stream_cache() {
 
 cleanup_mail_downloads() {
   run_cmd "rm -rf <Mail Downloads>/*" \
-    zsh -c 'rm -rf "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads/"*'
+    zsh -c 'rm -rf "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads/"*(DN)'
 }
 category_mail_downloads() {
   if (( ! SCAN_ONLY )) && pgrep -x Mail >/dev/null 2>&1; then
@@ -2402,7 +2402,7 @@ cleanup_intelligence_platform() {
   run_cmd "pkill -x intelligenceplatformd (best-effort)" \
     zsh -c 'pkill -x intelligenceplatformd 2>/dev/null; true'
   run_cmd "rm -rf ~/Library/IntelligencePlatform/*" \
-    zsh -c 'rm -rf "$HOME/Library/IntelligencePlatform/"*'
+    zsh -c 'rm -rf "$HOME/Library/IntelligencePlatform/"*(DN)'
 }
 
 category_intelligence_platform() {
@@ -2540,7 +2540,7 @@ category_jetbrains_caches() {
 
 cleanup_macos_software_update() {
   run_cmd "rm -rf ~/Library/Caches/com.apple.SoftwareUpdate/*" \
-    zsh -c 'rm -rf "$HOME/Library/Caches/com.apple.SoftwareUpdate/"*'
+    zsh -c 'rm -rf "$HOME/Library/Caches/com.apple.SoftwareUpdate/"*(DN)'
 }
 
 category_macos_software_update() {
@@ -2551,7 +2551,7 @@ category_macos_software_update() {
 
 cleanup_apple_maps_tiles() {
   local p="$HOME/Library/Containers/com.apple.Maps/Data/Library/Caches/com.apple.Maps/MapTiles"
-  run_cmd "rm -rf <Maps>/MapTiles/*" zsh -c "rm -rf ${(q)p}/*"
+  run_cmd "rm -rf <Maps>/MapTiles/*" zsh -c "rm -rf ${(q)p}/*(DN)"
 }
 
 category_apple_maps_tiles() {
@@ -3093,7 +3093,7 @@ category_ios_backups() {
   fi
 
   run_cmd "rm -rf ~/Library/Application Support/MobileSync/Backup/*" \
-    zsh -c 'rm -rf "$HOME/Library/Application Support/MobileSync/Backup/"*' || {
+    zsh -c 'rm -rf "$HOME/Library/Application Support/MobileSync/Backup/"*(DN)' || {
       log ERROR "category=ios_backups rc=$?"
       return 0
     }

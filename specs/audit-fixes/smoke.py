@@ -203,6 +203,18 @@ def trash_hidden_files(sb):
     expect(not left, f"у кошику лишилось: {left}", out)
 
 
+def glob_no_match(sb):
+    # Обидва каталоги існують, але в XCPGDevices нічого немає: glob без збігів
+    # не має перетворюватися на ERROR.
+    dev = put(sb.home / "Library/Developer/XCTestDevices/dev1/data")
+    (sb.home / "Library/Developer/XCPGDevices").mkdir(parents=True)
+    rc, out = sb.run("--only", "xctest", "--yes")
+    log = sb.log
+    expect(rc == 0, f"rc={rc}", out)
+    expect(not log_has(log, "ERROR"), "glob без збігів дав ERROR", log)
+    expect(not dev.exists(), "XCTestDevices не очищено", out)
+
+
 # ── H5: app_caches не чіпає кеші, якими володіють інші категорії ─────────
 
 OWNED = ("CocoaPods", "Mozilla.sccache", "bazel", "go-build")
@@ -224,7 +236,7 @@ SCENARIOS = {f.__name__: f for f in (
     errexit_inline, errexit_browser,
     false_clean_paths, false_clean_brew, false_clean_bazel,
     pnpm_v3_dryrun, pnpm_v3_failed,
-    trash_dotfile_only, trash_hidden_files,
+    trash_dotfile_only, trash_hidden_files, glob_no_match,
     app_caches_owned,
 )}
 
