@@ -1021,6 +1021,13 @@ category_app_caches() {
     com.google.GoogleUpdater
     com.plausiblelabs.crashreporter.data
     com.github.CopilotForXcode
+    # Owned by other categories, which have their own prompt, --skip key and
+    # pre-delete steps (sccache server stop, bazel shutdown). Spec 2026-05-07
+    # § Reconciliation: each cache is governed by exactly one prompt.
+    bazel               # category_bazel
+    CocoaPods           # category_cocoapods
+    go-build            # category_go_caches (default GOCACHE)
+    Mozilla.sccache     # category_sccache
   )
 
   # Returns 0 (denied) if the child name matches a literal deny entry or a
