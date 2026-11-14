@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "command": "python3 specs/editor-caches/smoke.py",
+  "cwd": "/Users/lion/Documents/Projects/mine/mac-cleaner-editor-caches",
+  "root": "/Users/lion/Documents/Projects/mine/mac-cleaner-editor-caches",
+  "before": "ac01b14736860a9e9553da51beb1c8a694eaefc7b7181ca7db0f1851c97e8aeb",
+  "after": "ac01b14736860a9e9553da51beb1c8a694eaefc7b7181ca7db0f1851c97e8aeb",
+  "exit_code": 0,
+  "log_sha256": "7a1992bd2fca055339a159498be68d3ff3df9f052df2e9958212fb7cc744a74a",
+  "artifacts": {}
+}

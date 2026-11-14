@@ -1,0 +1,14 @@
+$ git diff --check && bash /Users/lion/.claude/skills/security-review/scripts/security-check.sh --base main
+== secrets
+== dependencies
+  no lockfile or dependency manifest changed
+== network
+  no approved network layer given (--network-layer); read the project's AGENTS.md
+== permissions
+== summary (base main, merge-base ba138709)
+secrets       PASS
+dependencies  SKIP
+network       SKIP
+permissions   PASS
+
+exit: 0

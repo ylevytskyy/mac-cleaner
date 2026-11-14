@@ -1,0 +1,338 @@
+$ zsh -n mac-cleaner.sh && ./mac-cleaner.sh --dry-run </dev/null && ./mac-cleaner.sh --scan --only browsers
+mac-cleaner — interactive macOS developer-cache cleaner   run 24b8d9f8
+  How it works: walks each cache, shows its size, asks y/N — y cleans, anything else skips.
+  Flags: --scan | --only <cats> | --skip <cats> | --list | --dry-run | --yes | --prepare-for-pnpm | --help
+  Log:   /Users/lion/.mac-cleaner.log
+  Abort: Ctrl-C at any prompt. Xcode Archives & iOS backups have a second DELETE confirm.
+  (dry-run: nothing will be deleted)
+
+── npm/yarn (all nvm Node versions) ──────────────────────────────
+  Found 4 nvm Node version(s); invokes each bundled npm/yarn.
+  Catches per-version .npmrc cache overrides the default categories miss.
+  Size (shared caches): 2,11 GB
+  Clean across all 4 nvm version(s)? [y/N] 
+── npm/yarn (all brew Node formulas) ──────────────────────────────
+  Found 1 brew Node formula(s); invokes each bundled npm/yarn.
+  Catches per-formula .npmrc cache overrides the default categories miss.
+  Size (shared caches): 2,11 GB
+  Clean across all 1 brew Node formula(s)? [y/N] 
+── npm cache ──────────────────────────────
+  npm package download & tarball cache
+  Size: 750,19 MB
+  Clean this? [y/N] 
+── yarn cache ──────────────────────────────
+  yarn (classic) global cache
+  Size: 1,38 GB
+  Clean this? [y/N] 
+── pnpm store ──────────────────────────────
+  pnpm content-addressable store
+  Size: 1023,97 MB
+  Clean this? [y/N] 
+── Bun cache ──────────────────────────────
+  Bun package manager download & install cache
+  Size: 1,08 GB
+  Clean this? [y/N] 
+── Deno cache ──────────────────────────────
+  Deno module, npm, and compiler cache
+  Size: 0 B
+  already empty, skipping
+
+── Node toolchain extras ──────────────────────────────
+  ~/Library/Caches/node-gyp, ~/.npm/_logs
+  Size: 52,00 KB
+  Clean this? [y/N] 
+── uv cache ──────────────────────────────
+  uv Python package, wheel, and environment cache
+  Size: 171,13 MB
+  Clean this? [y/N] 
+── pip cache ──────────────────────────────
+  pip3 cache
+  Size: 28,92 MB
+  Clean this? [y/N] 
+── Python toolchain extras ──────────────────────────────
+  pre-commit hook venvs, Poetry, pip (XDG path)
+  Size: 28,92 MB
+  Clean this? [y/N] 
+── Homebrew ──────────────────────────────
+  old versions, downloads, autoremove unused
+  Size: 4,19 GB
+  Clean this? [y/N] 
+── Xcode DerivedData ──────────────────────────────
+  build intermediates, regenerated on next build
+  Size: 13,12 GB
+  Clean this? [y/N] 
+── Xcode Archives ──────────────────────────────
+  WARNING: archives are your App Store submission records.
+  Location: /Users/lion/Library/Developer/Xcode/Archives
+  Size: 0 B
+  already empty, skipping
+
+── iOS Simulators ──────────────────────────────
+  unavailable simulator devices (runtimes you uninstalled)
+  Clean this? [y/N] 
+── CoreSimulator caches ──────────────────────────────
+  iOS Simulator dyld closures, regenerated on next sim boot
+  Size: 0 B
+  already empty, skipping
+
+── CoreSimulator logs ──────────────────────────────
+  iOS Simulator runtime and crash logs (~/Library/Logs/CoreSimulator)
+  Size: 648,00 KB
+  Clean this? [y/N] 
+── Xcode test/playground devices ──────────────────────────────
+  ~/Library/Developer/{XCTestDevices,XCPGDevices} — recreated on next test/preview run
+  Size: 0 B
+  already empty, skipping
+
+── Xcode app cache ──────────────────────────────
+  ~/Library/Caches/com.apple.dt.Xcode (separate from DerivedData)
+  Size: 0 B
+  already empty, skipping
+
+── Xcode iOS device logs ──────────────────────────────
+  historical crash logs from attached devices, re-collected on next attach
+  Size: 0 B
+  already empty, skipping
+
+── SwiftUI Preview simulators ──────────────────────────────
+  Xcode preview simulator devices (can be tens of GB); recreated on next preview render
+  Size: 0 B
+  already empty, skipping
+
+── Xcode DeviceSupport ──────────────────────────────
+  Per-OS-version debug symbols; re-copied from device on next debug session
+  Size: 0 B
+  already empty, skipping
+
+── Xcode documentation ──────────────────────────────
+  Documentation caches & downloaded docsets; re-downloaded on demand
+  Size: 0 B
+  already empty, skipping
+
+── Instruments cache ──────────────────────────────
+  Instruments app cache (skipped by the generic sweep); regenerated on next launch
+  Size: 0 B
+  already empty, skipping
+
+── CocoaPods cache ──────────────────────────────
+  downloaded pod specs & sources
+  Size: 2,09 GB
+  Clean this? [y/N] 
+── Gradle caches ──────────────────────────────
+  ~/.gradle/caches (regenerated on next build)
+  Size: 8,84 GB
+  Clean this? [y/N] 
+── Android build cache ──────────────────────────────
+  ~/.android/build-cache
+  Size: 0 B
+  already empty, skipping
+
+── Android Studio + JetBrains IDE logs ──────────────────────────────
+  ~/Library/Logs/Google + ~/Library/Logs/JetBrains (all IDE versions)
+  Size: 0 B
+  already empty, skipping
+
+── Expo / Metro ──────────────────────────────
+  ~/.expo/cache, /tmp/metro-*, /tmp/haste-map-*, /tmp/react-*
+  Size: 0 B
+  already empty, skipping
+
+── SwiftPM cache ──────────────────────────────
+  ~/Library/Caches/org.swift.swiftpm
+  Size: 1008,64 MB
+  Clean this? [y/N] 
+── clangd index ──────────────────────────────
+  ~/.cache/clangd, re-indexed on next open
+  Size: 0 B
+  already empty, skipping
+
+── ccache ──────────────────────────────
+  compiler cache, refilled on miss
+  Size: 0 B
+  already empty, skipping
+
+── sccache ──────────────────────────────
+  Mozilla sccache disk cache (server stopped first)
+  Size: 0 B
+  already empty, skipping
+
+── Cargo registry ──────────────────────────────
+  ~/.cargo/registry/{cache,src} — re-downloaded on next build
+  Size: 0 B
+  already empty, skipping
+
+── Go caches ──────────────────────────────
+  GOMODCACHE=/Users/lion/go/pkg/mod
+  GOCACHE=/Users/lion/Library/Caches/go-build
+  Size: 0 B
+  already empty, skipping
+
+── Composer cache ──────────────────────────────
+  PHP Composer package cache
+  Size: 0 B
+  already empty, skipping
+
+── Bazel cache ──────────────────────────────
+  bazel not installed, skipping
+
+── JetBrains IDE caches ──────────────────────────────
+  ~/Library/Caches/JetBrains — IntelliJ, WebStorm, PyCharm, GoLand, RubyMine, etc. (re-indexed on next IDE launch)
+  Size: 0 B
+  already empty, skipping
+
+── Container VM disk images ──────────────────────────────
+  Docker / OrbStack / Colima / Lima / Podman — uses each tool's prune command.
+  (volumes preserved; pass --include-volumes to also prune them)
+  no container tools installed, skipping
+
+── Browser & Electron-app caches ──────────────────────────────
+  Safari, Chrome, Arc, Edge, Brave, Firefox, Slack,
+  VS Code, VS Code Insiders, Cursor, Windsurf, Devin, Devin - Next, Discord, Teams, Notion — лише кеші.
+  Cookies, history, logins, IndexedDB, and user data are NOT touched.
+  chrome is running, skipping its caches.
+  Firefox is running, skipping its caches.
+  Slack — size: 1,01 GB
+  Clean Slack caches? [y/N]   VS Code — size: 374,57 MB
+  Clean VS Code caches? [y/N]   Cursor — size: 63,29 MB
+  Clean Cursor caches? [y/N]   Windsurf — size: 86,20 MB
+  Clean Windsurf caches? [y/N]   Devin — size: 1,16 GB
+  Clean Devin caches? [y/N]   Devin - Next — size: 486,24 MB
+  Clean Devin - Next caches? [y/N]   Microsoft Teams is running, skipping its caches.
+  WARNING: Claude Code is running; keeping ~/.claude/shell-snapshots (live sessions depend on it).
+
+── Claude Code caches ──────────────────────────────
+  Claude Code CLI temporary caches, paste cache, and shell snapshots (~/.claude)
+  Size: 1,11 MB
+  Clean this? [y/N] 
+── AI / LLM model caches ──────────────────────────────
+  Ollama, Hugging Face, PyTorch hub, Whisper, LM Studio, GPT4All, Pinokio cache
+  Size: 0 B
+  already empty, skipping
+
+── Adobe media cache ──────────────────────────────
+  Premiere/After Effects/Audition conformed-audio & peak files; rebuilt on project open
+  Size: 0 B
+  already empty, skipping
+
+── Desktop app caches (Figma, Steam) ──────────────────────────────
+  Figma offline render cache & Steam metadata/shader caches; re-synced/recompiled
+  Size: 191,81 MB
+  Clean this? [y/N] 
+── macOS app caches ──────────────────────────────
+  ~/Library/Caches — immediate children (denylist-filtered)
+  Size: 3,52 GB
+  Clean this? [y/N] 
+── Temp directories ──────────────────────────────
+  /tmp and $TMPDIR — user-owned entries older than 7 days
+  Size: 11,18 MB
+  Clean this? [y/N] 
+── Dev dotfolder caches ──────────────────────────────
+  Hardcoded cache subpaths under ~/ (m2, pub, nuget, sbt, terraform, zig, etc.)
+  Size: 304,90 MB
+  Clean this? [y/N] 
+── User & crash logs ──────────────────────────────
+  App and crash logs; regenerated as new events occur
+  Size: 12,48 MB
+  Clean this? [y/N] 
+── QuickLook thumbnails ──────────────────────────────
+  Finder/Quick Look thumbnail cache; rebuilt on next preview
+  Size: 0 B
+  already empty, skipping
+
+── Font cache (user) ──────────────────────────────
+  User font registration database; rebuilt by fontd (usually small)
+  Clean this? [y/N] 
+── Apple Music stream cache ──────────────────────────────
+  ~/Library/Caches/com.apple.Music — does NOT contain downloaded songs
+  Size: 0 B
+  already empty, skipping
+
+── Mail Downloads ──────────────────────────────
+  extracted attachment copies; originals stay in mailbox .emlx files
+  Size: 0 B
+  already empty, skipping
+
+── Apple Maps tile cache ──────────────────────────────
+  ~/Library/Containers/com.apple.Maps/.../MapTiles — refetched on next view
+  Size: 0 B
+  already empty, skipping
+
+── Diagnostic reports ──────────────────────────────
+  ~/Library/Logs/DiagnosticReports + /Library/Logs/DiagnosticReports (.ips/.diag files)
+  Size: 11,59 MB
+  Clean this? [y/N] 
+── Apple Intelligence platform cache ──────────────────────────────
+  knowledge graph + per-locale inference artifacts; daemon rebuilds within hours
+  Size: 95,87 MB
+  Clean this? [y/N] 
+── Wallpaper aerials (videos + thumbnails) ──────────────────────────────
+  ~/Library/Application Support/com.apple.wallpaper/aerials/{videos,thumbnails}
+  Size: 580,17 MB
+  Re-downloads automatically on next screensaver activation (requires internet).
+  Manifest index is preserved; only video and thumbnail files are removed.
+  Clean wallpaper aerials? [y/N] 
+── macOS Software Update cache (per-user) ──────────────────────────────
+  ~/Library/Caches/com.apple.SoftwareUpdate — leftover update download bundles
+  Size: 0 B
+  already empty, skipping
+
+── Time Machine local snapshots ──────────────────────────────
+  no local snapshots, skipping
+
+── Stale macOS installers ──────────────────────────────
+  /Applications/Install macOS *.app — 12-15 GB stub installers
+  none present, skipping
+
+── iOS device backups ──────────────────────────────
+  WARNING: these are full device backups, NOT a cache. Deletion is permanent
+  and cannot be undone unless you also back up to iCloud.
+  none present, skipping
+
+── Trash ──────────────────────────────
+  ~/.Trash
+  Size: 132,00 KB
+  Clean this? [y/N] 
+── Tool versions ──────────────────────────────
+  npm    11.16.0 → latest 12.2.1
+  Update npm to 12.2.1? [y/N]   yarn   1.22.22 (up-to-date)
+  pnpm   12.4.2 → latest 12.16.1
+  Update pnpm to 12.16.1? [y/N]   node   v24.13.1 (report-only; upgrade via nvm/brew/installer)
+
+── Outdated global npm packages ──────────────────────────────
+  @levnikolaevich/hex-graph-mcp  0.20.2 → 0.21.1
+  Update @levnikolaevich/hex-graph-mcp to 0.21.1? [y/N]   eas-cli                        20.0.0 → 27.2.0
+  Update eas-cli to 27.2.0? [y/N]   npm                            11.16.0 → 11.21.1
+  Update npm to 11.21.1? [y/N]   pnpm                           12.4.2 → 12.16.1
+  Update pnpm to 12.16.1? [y/N] 
+── System maintenance (no disk reclaimed) ──────────────────────────────
+  These do not free disk space. purge frees inactive RAM; mdutil rebuilds
+  the Spotlight index. Both need sudo (you may be prompted for your password).
+  Run system maintenance (sudo)? [y/N] 
+── Summary ────────────────────
+  Freed 0 B across 0 categories
+  Log:  /Users/lion/.mac-cleaner.log
+mac-cleaner — interactive macOS developer-cache cleaner   run fe62c7d2
+  How it works: walks each cache, shows its size, asks y/N — y cleans, anything else skips.
+  Flags: --scan | --only <cats> | --skip <cats> | --list | --dry-run | --yes | --prepare-for-pnpm | --help
+  Log:   /Users/lion/.mac-cleaner.log
+  Abort: Ctrl-C at any prompt. Xcode Archives & iOS backups have a second DELETE confirm.
+  (--only: browsers)
+  (scan mode: calculating reclaimable space, no changes will be made)
+
+  CATEGORY                             RECLAIMABLE
+  ──────────────────────────────────── ───────────
+  Browser: chrome                       292,71 MB
+  Browser: Firefox                        1,04 GB
+  App cache: Slack                        1,01 GB
+  App cache: VS Code                    374,57 MB
+  App cache: Cursor                      63,29 MB
+  App cache: Windsurf                    86,20 MB
+  App cache: Devin                        1,16 GB
+  App cache: Devin - Next               486,24 MB
+  ──────────────────────────────────── ───────────
+  Total Reclaimable                       4,48 GB
+
+  Found reclaimable space in 8 categories.
+  Run without --scan to clean interactively, or use --only <key> / --skip <key>.
+
+exit: 0

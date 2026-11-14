@@ -11,6 +11,9 @@ No daemons, no config, no dependencies beyond the tools whose caches it cleans.
 | npm cache | `~/.npm` (also swept across **every nvm-installed Node**, catching per-version `.npmrc` overrides) |
 | yarn cache | `~/Library/Caches/Yarn` (handles both classic v1 and modern Yarn) |
 | pnpm store | `~/Library/pnpm/store` or `~/.pnpm-store` (also offers to remove the orphaned `~/Library/pnpm/store/v3` legacy store left by pnpm 5–8 if pnpm has migrated) |
+| Bun cache | `~/.bun/install/cache` (`bun pm cache rm`) |
+| Deno cache | `~/Library/Caches/deno` (`deno clean`) |
+| uv cache | `~/.cache/uv` (`uv cache clean`) |
 | Homebrew | `brew cleanup -s` + `brew autoremove` |
 | Xcode DerivedData | `~/Library/Developer/Xcode/DerivedData` |
 | Xcode Archives | `~/Library/Developer/Xcode/Archives` *(double-prompted: requires typing `DELETE`)* |
@@ -35,6 +38,7 @@ Targets the buckets macOS reports as **"System Data"** (System Settings → Gene
 | Category | Path / command |
 |---|---|
 | CoreSimulator caches | `~/Library/Developer/CoreSimulator/Caches` *(skip if Simulator running)* |
+| CoreSimulator logs | `~/Library/Logs/CoreSimulator` *(runtime and crash logs; skip if Simulator running)* |
 | Xcode test/playground devices | `~/Library/Developer/{XCTestDevices,XCPGDevices}` *(skip if Xcode running)* |
 | Xcode app cache | `~/Library/Caches/com.apple.dt.Xcode` *(skip if Xcode running)* |
 | Xcode iOS device logs | `~/Library/Developer/Xcode/iOS Device Logs` |
@@ -46,8 +50,9 @@ Targets the buckets macOS reports as **"System Data"** (System Settings → Gene
 | Go caches | `go clean -modcache && go clean -cache` |
 | Composer cache | `composer clear-cache` |
 | Bazel cache | `bazel shutdown` then `/private/var/tmp/_bazel_$USER` and `~/Library/Caches/bazel` |
-| Container VMs | per-tool prune for Docker / OrbStack / Colima / Lima / Podman *(volumes preserved unless `--include-volumes`)* |
+| Container VMs | per-tool prune for Docker / OrbStack / Colima / Lima / Podman + Colima download cache `~/.colima/_cache` *(volumes preserved unless `--include-volumes`)* |
 | Browser & Electron-app caches | Safari, Chrome, Arc, Edge, Brave, Firefox, Slack, **VS Code, VS Code Insiders, Cursor, Windsurf, Discord, Microsoft Teams, Notion** — cache subdirs only (Chromium top-level shader caches + Firefox `startupCache` included); cookies/history/logins/IndexedDB preserved *(skip if browser/app running)* |
+| Claude Code CLI cache | `~/.claude/{cache,paste-cache,shell-snapshots,debug}` — temporary snapshots and prompt caches |
 | Apple Music stream cache | `~/Library/Caches/com.apple.Music` *(skip if Music running; does NOT contain downloaded songs)* |
 | Mail Downloads | `~/Library/Containers/com.apple.mail/Data/Library/Mail Downloads` *(skip if Mail running)* |
 | Apple Maps tile cache | `~/Library/Containers/com.apple.Maps/Data/Library/Caches/com.apple.Maps/MapTiles` — refetched on next view |
@@ -85,14 +90,39 @@ These are real System Data contributors but the safety/value tradeoff doesn't fi
 ## Usage
 
 ```bash
-./mac-cleaner.sh                  # interactive run
-./mac-cleaner.sh --dry-run        # preview only — nothing is deleted
-./mac-cleaner.sh --yes            # auto-accept y/N prompts (Xcode Archives & iOS backups still double-prompt)
+./mac-cleaner.sh                   # interactive run
+./mac-cleaner.sh --scan            # non-destructive fast scan of all reclaimable caches
+./mac-cleaner.sh --list            # list all available categories, keys, and groups
+./mac-cleaner.sh --only <cats>     # clean only specified categories/groups (e.g. --only node,uv)
+./mac-cleaner.sh --skip <cats>     # skip specified categories/groups (e.g. --skip xcode,trash)
+./mac-cleaner.sh --dry-run         # preview only — prints every command, deletes nothing
+./mac-cleaner.sh --yes             # auto-accept prompts (Archives & iOS backups still double-prompt)
 ./mac-cleaner.sh --include-volumes # also prune Docker/Podman named volumes (DESTROYS DATA)
 ./mac-cleaner.sh --help
 ```
 
-For each category the script:
+### Filtering categories
+
+You can target specific categories or entire groups using `--only` or `--skip` with comma-separated keys:
+
+- **By key:** `./mac-cleaner.sh --only npm,yarn,pnpm,bun,deno`
+- **By group:** `./mac-cleaner.sh --only node,python,ai`
+- **Scan specific group:** `./mac-cleaner.sh --scan --only browsers`
+- **Skip heavy or sensitive categories:** `./mac-cleaner.sh --skip archives,ios_backups,timemachine`
+
+Run `./mac-cleaner.sh --list` to inspect all keys and group mappings.
+
+Категорія `browsers` також охоплює кеші **Devin і Devin - Next** та
+`CachedExtensionVSIXs` у **VS Code, VS Code Insiders, Cursor, Windsurf,
+Devin і Devin - Next**. Це завантажені архіви розширень; встановлені
+розширення залишаються на місці. Архіви за потреби завантажаться повторно.
+Перед очищенням закрийте відповідний редактор: запущені програми пропускаються.
+Для Devin зберігаються `User`, розмови, `Service Worker`, локальне сховище,
+IndexedDB та облікові дані; видаляються лише явно перелічені кеші.
+Переглянути обсяг можна командою `./mac-cleaner.sh --scan --only browsers`,
+а команди очищення — `./mac-cleaner.sh --dry-run --yes --only browsers`.
+
+For each category during an interactive run:
 
 1. Reports the cache size (skips silently if already empty / tool not installed).
 2. Asks `y/N`. Anything other than `y` skips.
@@ -107,6 +137,9 @@ At the end you get a summary: total bytes freed and number of categories cleaned
 - **iOS device backups are the only user-data category.** They are guarded with a per-backup listing plus the typed-`DELETE` confirm; every other category deletes only regenerable caches.
 - **`sudo` is used in exactly one place** — the opt-in System maintenance step (`purge` / `mdutil`), which reclaims no disk and is excluded from the freed total. Everything else runs as your user.
 - `--dry-run` prints every command it *would* run, deletes nothing (including the `sudo` maintenance commands).
+- **Graceful abort:** Pressing `Ctrl-C` at any time is caught by a `SIGINT` handler, printing a summary of what was freed so far before exiting cleanly.
+- **EOF & pipe safe:** All confirmation prompts safely handle EOF (`ans=""`), preventing unexpected aborts under `set -e` in non-interactive pipelines.
+- **In-memory size caching:** Repeated directory size calculations are cached per path within each run to prevent redundant multi-gigabyte disk walks.
 - Gradle: the script stops `gradle --stop` (or kills `GradleDaemon` / `KotlinCompileDaemon`) before deleting, because a half-deleted Gradle cache produces broken Android builds. If a delete partially fails, the script tells you loudly and gives you the recovery command.
 - Categories never abort the run — a per-category failure logs `ERROR` and the script continues to the next one.
 - All actions are logged to `~/.mac-cleaner.log` with a 4-byte run id so you can correlate runs.

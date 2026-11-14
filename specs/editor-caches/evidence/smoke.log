@@ -1,0 +1,5 @@
+$ python3 specs/editor-caches/smoke.py
+Редактори: Code, Code - Insiders, Cursor, Windsurf, Devin, Devin - Next
+Сканування, попередній перегляд, відмова, EOF, захист процесів, очищення та повторний запуск — успішно
+
+exit: 0

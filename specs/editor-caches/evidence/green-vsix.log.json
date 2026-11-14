@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "command": "python3 specs/editor-caches/smoke.py vsix",
+  "cwd": "/Users/lion/Documents/Projects/mine/mac-cleaner-editor-caches",
+  "root": "/Users/lion/Documents/Projects/mine/mac-cleaner-editor-caches",
+  "before": "09e87b72c6110a8100e60c008d1098b9fda40bb7289ab7b5ab1d895dd0699aaa",
+  "after": "09e87b72c6110a8100e60c008d1098b9fda40bb7289ab7b5ab1d895dd0699aaa",
+  "exit_code": 0,
+  "log_sha256": "ea3855064a40d20d5e45b8170f54a36040ecc5ee0a388f06055ac98d309b981b",
+  "artifacts": {}
+}

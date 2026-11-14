@@ -10,6 +10,13 @@ DRY_RUN=0
 ASSUME_YES=0
 PREPARE_PNPM=0
 INCLUDE_VOLUMES=0
+SCAN_ONLY=0
+SCAN_TOTAL=0
+SCAN_COUNT=0
+LIST_CATEGORIES=0
+ONLY_CATEGORIES=""
+SKIP_CATEGORIES=""
+typeset -A DU_CACHE
 LOG_FILE="${HOME}/.mac-cleaner.log"
 RUN_ID="$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 SCRIPT_NAME="${${ZSH_ARGZERO:-$0}:t}"
@@ -24,34 +31,189 @@ else
   C_RESET=""; C_BOLD=""; C_DIM=""; C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""
 fi
 
+handle_sigint() {
+  trap - INT
+  printf '\n\n%sCleanup interrupted by user (Ctrl-C).%s\n' "$C_YELLOW" "$C_RESET"
+  if (( CATEGORIES_CLEANED > 0 )); then
+    printf '  Freed %s%s%s across %d categories before interrupt\n' \
+      "$C_GREEN" "$(human_size "$TOTAL_FREED")" "$C_RESET" "$CATEGORIES_CLEANED"
+  fi
+  log ABORT "freed_total=$TOTAL_FREED categories_cleaned=$CATEGORIES_CLEANED"
+  exit 130
+}
+trap handle_sigint INT
+
 usage() {
   cat <<EOF
 mac-cleaner — interactive macOS developer-cache cleaner
 
 Usage:
-  ${SCRIPT_NAME} [--dry-run] [--yes|-y] [--prepare-for-pnpm] [--include-volumes] [--help|-h]
+  ${SCRIPT_NAME} [options]
 
 Flags:
-  --dry-run   Show what would be deleted without deleting. Still prompts.
-  --yes, -y   Skip y/N prompts (Xcode Archives still double-prompts).
+  --scan              Fast read-only scan: show reclaimable space without cleaning.
+  --only <cats>       Clean only specified categories or groups (comma-separated).
+  --skip <cats>       Skip specified categories or groups (comma-separated).
+  --list              List all available category keys and groups, then exit.
+  --dry-run           Show what would be deleted without deleting. Still prompts.
+  --yes, -y           Skip y/N prompts (Xcode Archives & iOS backups still double-prompt;
+                      sudo maintenance and npm global upgrades always ask).
   --prepare-for-pnpm  Clean only npm/yarn caches across nvm + brew Node versions; skip everything else.
   --include-volumes   Also prune Docker/Podman named volumes (DESTROYS DATA). Off by default.
-  --help, -h  This message.
+  --help, -h          This message.
 
 Log: ${LOG_FILE}
 EOF
 }
 
-for arg in "$@"; do
-  case "$arg" in
+list_categories() {
+  cat <<EOF
+mac-cleaner — Available Categories and Groups
+
+Usage with --only / --skip:
+  ./mac-cleaner.sh --only <key|group,...>
+  ./mac-cleaner.sh --skip <key|group,...>
+
+Key                   Group        Description
+────────────────────  ───────────  ───────────────────────────────────────────────────
+npm_nvm               node         npm/yarn caches across all nvm Node versions
+npm_brew              node         npm/yarn caches across all brew Node formulas
+npm                   node         npm package download & tarball cache (~/.npm)
+yarn                  node         yarn classic & modern cache (~/Library/Caches/Yarn)
+pnpm                  node         pnpm content-addressable store
+bun                   node         Bun package manager cache (~/.bun/install/cache)
+deno                  node         Deno module, npm & compiler cache (~/Library/Caches/deno)
+uv                    python       uv Python package, wheel & venv cache (~/.cache/uv)
+pip                   python       pip package cache
+python_extras         python       pre-commit, poetry, pip cache extras
+node_extras           node         node-gyp, npm logs
+brew                  system       Homebrew downloads, old versions, autoremove
+deriveddata           xcode        Xcode DerivedData
+archives              xcode        Xcode Archives (double-prompted)
+ios_sim               xcode        iOS Simulator unavailable runtimes
+coresimulator         xcode        iOS Simulator dyld caches
+coresimulator_logs    xcode        iOS Simulator runtime and crash logs
+xctest                xcode        Xcode test and playground devices
+xcode_dt              xcode        Xcode app cache
+xcode_logs            xcode        Xcode iOS device logs
+xcode_previews        xcode        SwiftUI preview simulator device sets
+xcode_devicesupport   xcode        Xcode per-OS-version debug symbols
+xcode_docs            xcode        Xcode documentation caches and docsets
+instruments           xcode        Xcode Instruments cache
+cocoapods             mobile       CocoaPods cache
+gradle                mobile       Gradle caches (stops daemons first)
+android_build         mobile       Android build cache
+android_studio_logs   mobile       Android Studio & JetBrains IDE logs
+expo_metro            mobile       Expo and Metro bundler caches
+swiftpm               dev          Swift Package Manager cache
+clangd                dev          clangd index
+ccache                dev          ccache compiler cache
+sccache               dev          sccache shared compiler cache
+cargo                 dev          Cargo package & git cache
+go                    dev          Go module & build cache
+composer              dev          PHP Composer cache
+bazel                 dev          Bazel cache
+containers            containers   Docker, OrbStack, Colima, Lima, Podman VMs
+browsers              browsers     Safari, Chrome, Arc, Edge, Brave, Firefox, Slack, Electron
+adobe                 media        Adobe Premiere/After Effects media cache
+desktop_apps          apps         Figma, Steam shader & app caches
+claude                ai           Claude Code CLI temporary caches & snapshots
+llm                   ai           Ollama, Hugging Face, PyTorch, Whisper, LM Studio
+app_caches            system       macOS ~/Library/Caches immediate children (filtered)
+temp                  system       User-owned temp files older than 7 days
+dev_dotcaches         system       Dev dotfolder caches (~/.cache, ~/.m2, etc.)
+user_logs             system       User and crash logs (~/Library/Logs)
+jetbrains             dev          JetBrains IDE caches
+quicklook             system       QuickLook thumbnail cache
+fonts                 system       User font cache
+music                 system       Apple Music stream cache
+mail_downloads        system       Mail Downloads
+maps_tiles            system       Apple Maps tile cache
+diagnostic_reports    system       macOS diagnostic & crash reports
+intelligence_platform system       Apple Intelligence platform cache
+wallpaper             system       Wallpaper aerial videos and thumbnails
+software_update       system       macOS Software Update cache
+timemachine           system       Time Machine local snapshots
+macos_installers      system       Stale macOS installers (/Applications)
+ios_backups           userdata     iOS device backups (double-prompted)
+trash                 system       macOS Trash (~/.Trash)
+tool_versions         audit        Audit npm, yarn, pnpm tool versions
+npm_globals           audit        Audit outdated global npm packages
+system_maintenance    system       Free inactive RAM (purge) & rebuild Spotlight (sudo)
+
+Groups:
+  node        All Node/JS package manager caches (npm, yarn, pnpm, bun, deno)
+  python      Python package and toolchain caches (pip, uv, poetry, pre-commit)
+  xcode       All Xcode, iOS Simulator, and developer caches
+  mobile      Android, Gradle, CocoaPods, and Expo caches
+  dev         Language & build tools (Rust, Go, Swift, C++, Bazel, JetBrains)
+  containers  Docker, OrbStack, Colima, Lima, Podman VM disks & caches
+  browsers    Browser & Electron desktop app caches
+  ai          Ollama, Hugging Face, PyTorch, Claude Code caches
+  apps        Desktop application caches (Figma, Steam, Adobe)
+  system      macOS app caches, temp, logs, updates, snapshots, trash
+  userdata    User personal data (iOS backups)
+  audit       Tool version checks and outdated global packages
+EOF
+}
+
+while (( $# > 0 )); do
+  case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --yes|-y)  ASSUME_YES=1 ;;
     --prepare-for-pnpm) PREPARE_PNPM=1 ;;
     --include-volumes) INCLUDE_VOLUMES=1 ;;
+    --scan)    SCAN_ONLY=1 ;;
+    --list)    LIST_CATEGORIES=1 ;;
+    --only)
+      shift
+      [[ $# -gt 0 ]] || { echo "Error: --only requires a category list" >&2; exit 2; }
+      ONLY_CATEGORIES="$1"
+      ;;
+    --only=*)
+      ONLY_CATEGORIES="${1#*=}"
+      ;;
+    --skip)
+      shift
+      [[ $# -gt 0 ]] || { echo "Error: --skip requires a category list" >&2; exit 2; }
+      SKIP_CATEGORIES="$1"
+      ;;
+    --skip=*)
+      SKIP_CATEGORIES="${1#*=}"
+      ;;
     --help|-h) usage; exit 0 ;;
-    *) echo "Unknown flag: $arg" >&2; usage; exit 2 ;;
+    *) echo "Unknown flag: $1" >&2; usage; exit 2 ;;
   esac
+  shift
 done
+
+if (( LIST_CATEGORIES )); then
+  list_categories
+  exit 0
+fi
+
+# Keys and groups accepted by --only / --skip (must match list_categories + run_cat calls in main).
+VALID_CATEGORY_KEYS="npm_nvm npm_brew npm yarn pnpm bun deno uv pip python_extras node_extras brew \
+deriveddata archives ios_sim coresimulator coresimulator_logs xctest xcode_dt xcode_logs xcode_previews \
+xcode_devicesupport xcode_docs instruments cocoapods gradle android_build android_studio_logs expo_metro \
+swiftpm clangd ccache sccache cargo go composer bazel containers browsers adobe desktop_apps claude llm \
+app_caches temp dev_dotcaches user_logs jetbrains quicklook fonts music mail_downloads maps_tiles \
+diagnostic_reports intelligence_platform wallpaper software_update timemachine macos_installers \
+ios_backups trash tool_versions npm_globals system_maintenance \
+node python xcode mobile dev containers browsers media apps ai system userdata audit"
+
+validate_category_list() {
+  local item
+  for item in "${(@s:,:)1}"; do
+    [[ -z "$item" ]] && continue
+    if [[ " $VALID_CATEGORY_KEYS " != *" $item "* ]]; then
+      echo "Unknown category: $item (see --list)" >&2
+      exit 2
+    fi
+  done
+}
+if [[ -n "$ONLY_CATEGORIES" ]]; then validate_category_list "$ONLY_CATEGORIES"; fi
+if [[ -n "$SKIP_CATEGORIES" ]]; then validate_category_list "$SKIP_CATEGORIES"; fi
 
 # ── helpers ──────────────────────────────────────────────
 
@@ -76,45 +238,138 @@ human_size() {
 }
 
 du_safe() {
-  # echo size-in-bytes of path, 0 if missing
+  # echo size-in-bytes of path, 0 if missing (cached within run)
   local path="$1"
   if [[ ! -e "$path" ]]; then echo 0; return; fi
+  if [[ -n "${DU_CACHE[$path]:-}" ]]; then
+    echo "${DU_CACHE[$path]}"
+    return
+  fi
   # du -sk gives KB; multiply by 1024. Use BSD du (macOS default).
-  local kb
-  kb="$(/usr/bin/du -sk "$path" 2>/dev/null | /usr/bin/awk '{print $1}')"
-  echo "$(( ${kb:-0} * 1024 ))"
+  local kb=""
+  kb="$( (/usr/bin/du -sk "$path" 2>/dev/null || true) | /usr/bin/awk '{print $1}' )"
+  local bytes="$(( ${kb:-0} * 1024 ))"
+  DU_CACHE[$path]="$bytes"
+  echo "$bytes"
 }
 
 confirm() {
-  # confirm "<prompt>" — returns 0 if yes, 1 if no
+  # confirm "<prompt>" — returns 0 if yes, 1 if no (safe on EOF)
   local prompt="$1"
   if (( ASSUME_YES )); then
     printf '  %s [y/N] %sy (auto)%s\n' "$prompt" "$C_DIM" "$C_RESET"
     return 0
   fi
   printf '  %s [y/N] ' "$prompt"
-  local ans
-  read -r ans
+  local ans=""
+  read -r ans || ans=""
+  [[ "$ans" == "y" || "$ans" == "Y" ]]
+}
+
+confirm_explicit() {
+  # confirm_explicit "<prompt>" — like confirm, but --yes does NOT auto-accept.
+  # Used for sudo and global package upgrades; declines on EOF.
+  local prompt="$1"
+  printf '  %s [y/N] ' "$prompt"
+  local ans=""
+  read -r ans || ans=""
   [[ "$ans" == "y" || "$ans" == "Y" ]]
 }
 
 run_cmd() {
   # run_cmd <desc> <cmd...>  — respects DRY_RUN, returns cmd's rc
+  # local_options restores the caller's errexit state on return. A bare
+  # `set -e` here would re-arm errexit inside run_cat's `set +e` region, and
+  # the next failing call would then abort the whole run.
+  setopt local_options no_err_exit
   local desc="$1"; shift
   if (( DRY_RUN )); then
     printf '  %s[dry-run]%s %s\n' "$C_DIM" "$C_RESET" "$*"
     return 0
   fi
-  # Relax -e briefly so we can keep going on per-category failures.
-  set +e
   "$@"
   local rc=$?
-  set -e
+  # Real deletion commands may invalidate cached sizes
+  DU_CACHE=()
   return $rc
 }
 
 section() {
   printf '\n%s── %s %s%s\n' "$C_BOLD" "$1" "$(printf -- '─%.0s' {1..30})" "$C_RESET"
+}
+
+is_category_enabled() {
+  local key="$1"
+  local -a groups=("${(@s:,:)2}")
+  local item="" g="" matched=0
+
+  # If --prepare-for-pnpm is active, only allow node/npm/yarn categories
+  if (( PREPARE_PNPM )); then
+    case "$key" in
+      npm_nvm|npm_brew|npm|yarn) return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
+
+  # Check ONLY_CATEGORIES filter
+  if [[ -n "$ONLY_CATEGORIES" ]]; then
+    matched=0
+    local -a only_items=("${(@s:,:)ONLY_CATEGORIES}")
+    for item in "${only_items[@]}"; do
+      [[ -z "$item" ]] && continue
+      if [[ "$key" == "$item" ]]; then matched=1; break; fi
+      for g in "${groups[@]}"; do
+        if [[ "$g" == "$item" ]]; then matched=1; break 2; fi
+      done
+    done
+    (( matched )) || return 1
+  fi
+
+  # Check SKIP_CATEGORIES filter
+  if [[ -n "$SKIP_CATEGORIES" ]]; then
+    local -a skip_items=("${(@s:,:)SKIP_CATEGORIES}")
+    for item in "${skip_items[@]}"; do
+      [[ -z "$item" ]] && continue
+      if [[ "$key" == "$item" ]]; then return 1; fi
+      for g in "${groups[@]}"; do
+        if [[ "$g" == "$item" ]]; then return 1; fi
+      done
+    done
+  fi
+
+  return 0
+}
+
+run_cat() {
+  local key="$1" groups="$2" fn="$3"
+  is_category_enabled "$key" "$groups" || return 0
+  set +e
+  "$fn"
+  local rc=$?
+  set -e
+  if (( rc != 0 )); then
+    printf '  %sERROR:%s category %s failed with code %d (continuing)\n' "$C_RED" "$C_RESET" "$key" "$rc"
+    log ERROR "category=$key rc=$rc"
+  fi
+  return 0
+}
+
+# Failed cleanup: log ERROR, never CLEAN. Bytes that were actually freed before
+# the failure still count toward TOTAL_FREED (not CATEGORIES_CLEANED), so one
+# locked child does not erase a mostly-successful category from the summary.
+# Usage: report_failed_cleanup <log_cat> <rc> <freed_bytes>
+report_failed_cleanup() {
+  local logcat="$1" rc="$2" freed="$3"
+  (( freed < 0 )) && freed=0
+  if (( freed > 0 )); then
+    TOTAL_FREED=$(( TOTAL_FREED + freed ))
+    printf '  %sERROR%s cleanup returned rc=%d, partially freed %s (continuing)\n' \
+      "$C_RED" "$C_RESET" "$rc" "$(human_size "$freed")"
+    log ERROR "category=$logcat rc=$rc partial=true freed_bytes=$freed"
+  else
+    printf '  %sERROR%s cleanup returned rc=%d (continuing)\n' "$C_RED" "$C_RESET" "$rc"
+    log ERROR "category=$logcat rc=$rc"
+  fi
 }
 
 # category runner: handles the size-show / prompt / delete-and-measure loop.
@@ -127,12 +382,24 @@ run_category() {
     return 1
   fi
 
-  section "$name"
-  printf '  %s\n' "$desc"
-
   local before=0
   if [[ "$size_path" != "-" ]]; then
     before="$(du_safe "$size_path")"
+  fi
+
+  if (( SCAN_ONLY )); then
+    if (( before > 0 )); then
+      printf '  %-36s %s%10s%s\n' "$name" "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + before ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+    fi
+    return 0
+  fi
+
+  section "$name"
+  printf '  %s\n' "$desc"
+
+  if [[ "$size_path" != "-" ]]; then
     printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
     if (( before == 0 )); then
       printf '  %salready empty, skipping%s\n' "$C_DIM" "$C_RESET"
@@ -155,8 +422,8 @@ run_category() {
   fi
 
   if (( rc != 0 )); then
-    printf '  %sERROR%s cleanup returned rc=%d (continuing)\n' "$C_RED" "$C_RESET" "$rc"
-    log ERROR "category=$name rc=$rc"
+    # size_path "-" means nothing was measured: report no freed bytes.
+    report_failed_cleanup "$name" "$rc" $(( before - after ))
     return 0
   fi
 
@@ -180,6 +447,16 @@ run_paths_category() {
   for p in "${paths[@]}"; do
     [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
   done
+
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "$name" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+    fi
+    return 0
+  fi
+
   section "$name"
   printf '  %s\n' "$desc"
   printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
@@ -192,16 +469,22 @@ run_paths_category() {
     log DECLINE "category=$logcat size_bytes=$total"
     return 0
   fi
+  local rc=0
   for p in "${paths[@]}"; do
     [[ -e "$p" ]] || continue
     rel="${p/#$HOME/~}"
-    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}"
+    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
   local after=0
   for p in "${paths[@]}"; do
     [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
   done
   local freed=$(( total - after ))
+  # A failed rm is ERROR (with any partial bytes), never CLEAN.
+  if (( rc != 0 )); then
+    report_failed_cleanup "$logcat" "$rc" "$freed"
+    return 0
+  fi
   (( freed < 0 )) && freed=0
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
@@ -232,7 +515,7 @@ cleanup_pnpm_store() {
   # v3 legacy store: pnpm 5-8 stored at ~/Library/pnpm/store/v3.
   # pnpm 9+ migrated to v10/v11; v3 is permanently unreachable.
   # Guard rail: if v3 dir exists and is NOT the active store, offer to delete it.
-  local v3="$HOME/Library/pnpm/store/v3"
+  local v3="$HOME/Library/pnpm/store/v3" rc=0
   if [[ -d "$v3" ]]; then
     local active=""
     if have pnpm; then
@@ -244,28 +527,60 @@ cleanup_pnpm_store() {
         printf '  %spnpm legacy v3 store found (orphaned by pnpm 9+):%s %s\n' \
           "$C_YELLOW" "$C_RESET" "$(human_size "$v3_size")"
         if confirm "  Remove orphaned pnpm v3 store?"; then
-          run_cmd "rm -rf ~/Library/pnpm/store/v3" zsh -c "rm -rf ${(q)v3}"
-          log CLEAN "category=pnpm_store action=remove_v3_orphan freed_bytes=$v3_size"
+          local v3_rc=0
+          run_cmd "rm -rf ~/Library/pnpm/store/v3" zsh -c "rm -rf ${(q)v3}" || v3_rc=$?
+          if (( v3_rc )); then
+            log ERROR "category=pnpm_store action=remove_v3_orphan rc=$v3_rc"
+            rc=$v3_rc
+          else
+            # Re-measure: under --dry-run nothing was removed, so freed is 0.
+            local v3_after=0 v3_freed
+            [[ -e "$v3" ]] && v3_after=$(du_safe "$v3")
+            v3_freed=$(( v3_size - v3_after ))
+            (( v3_freed < 0 )) && v3_freed=0
+            log CLEAN "category=pnpm_store action=remove_v3_orphan freed_bytes=$v3_freed"
+          fi
         else
           log DECLINE "category=pnpm_store action=remove_v3_orphan size_bytes=$v3_size"
         fi
       fi
     fi
   fi
-  have pnpm || { log SKIP "category=pnpm_store reason=tool_not_installed"; return 0; }
-  run_cmd "pnpm store prune" pnpm store prune
+  have pnpm || { log SKIP "category=pnpm_store reason=tool_not_installed"; return $rc; }
+  run_cmd "pnpm store prune" pnpm store prune || rc=$?
+  return $rc
+}
+
+cleanup_bun_cache() {
+  # `bun pm cache rm` refuses to run unless cwd has a package.json (bun 1.x),
+  # so it fails with rc=1 from an arbitrary directory. The cache path is fixed
+  # and hardcoded, so remove it directly.
+  if [[ -d "$HOME/.bun/install/cache" ]]; then
+    run_cmd "rm -rf ~/.bun/install/cache" zsh -c 'rm -rf "$HOME/.bun/install/cache"'
+  fi
+}
+
+cleanup_deno_cache() {
+  if have deno; then
+    run_cmd "deno clean" deno clean
+  elif [[ -d "$HOME/Library/Caches/deno" ]]; then
+    run_cmd "rm -rf ~/Library/Caches/deno" zsh -c 'rm -rf "$HOME/Library/Caches/deno"'
+  fi
 }
 
 cleanup_brew() {
+  local rc=0
   have brew || { log SKIP "category=brew reason=tool_not_installed"; return 0; }
-  run_cmd "brew cleanup -s"   brew cleanup -s
-  run_cmd "brew autoremove"   brew autoremove
+  run_cmd "brew cleanup -s"   brew cleanup -s || rc=$?
+  run_cmd "brew autoremove"   brew autoremove || rc=$?
+  return $rc
 }
 
 cleanup_npm_yarn_all_nvm() {
   # Each nvm-installed Node ships its own npm (and optionally yarn) with
   # potentially a different `cache` setting via per-version .npmrc.
   # Invoke each version's binaries so custom cache paths also get purged.
+  local rc=0
   local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
   local versions_dir="$nvm_dir/versions/node"
   local vpath vname vbin yarn_v
@@ -274,17 +589,18 @@ cleanup_npm_yarn_all_nvm() {
     vname="${vpath:t}"
     vbin="$vpath/bin"
     if [[ -x "$vbin/npm" ]]; then
-      run_cmd "($vname) npm cache clean --force" "$vbin/npm" cache clean --force
+      run_cmd "($vname) npm cache clean --force" "$vbin/npm" cache clean --force || rc=$?
     fi
     if [[ -x "$vbin/yarn" ]]; then
       yarn_v="$("$vbin/yarn" --version 2>/dev/null || echo 0)"
       if [[ "${yarn_v%%.*}" == "1" ]]; then
-        run_cmd "($vname) yarn cache clean" "$vbin/yarn" cache clean
+        run_cmd "($vname) yarn cache clean" "$vbin/yarn" cache clean || rc=$?
       else
-        run_cmd "($vname) yarn cache clean --all" "$vbin/yarn" cache clean --all
+        run_cmd "($vname) yarn cache clean --all" "$vbin/yarn" cache clean --all || rc=$?
       fi
     fi
   done
+  return $rc
 }
 
 # Wrappers that call run_category with the right sizing path.
@@ -304,6 +620,16 @@ category_pnpm_store() {
   run_category "pnpm store" "pnpm content-addressable store" "$p" cleanup_pnpm_store
 }
 
+category_bun_cache() {
+  local p="$HOME/.bun/install/cache"
+  run_category "Bun cache" "Bun package manager download & install cache" "$p" cleanup_bun_cache
+}
+
+category_deno_cache() {
+  local p="$HOME/Library/Caches/deno"
+  run_category "Deno cache" "Deno module, npm, and compiler cache" "$p" cleanup_deno_cache
+}
+
 category_brew() {
   local p
   if have brew; then p="$(brew --cache 2>/dev/null || echo /tmp/does-not-exist)"; else p="-"; fi
@@ -311,6 +637,9 @@ category_brew() {
 }
 
 category_npm_yarn_all_nvm() {
+  if (( SCAN_ONLY )); then
+    return 0
+  fi
   local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
   local versions_dir="$nvm_dir/versions/node"
   section "npm/yarn (all nvm Node versions)"
@@ -360,6 +689,7 @@ cleanup_npm_yarn_all_brew() {
   # Each brew-installed Node formula ships its own npm; corepack-shimmed yarn
   # may also live under that prefix's bin. Per-formula .npmrc may set a custom
   # cache path, so invoke each binary explicitly.
+  local rc=0
   have brew || return 0
   local formulas formula prefix vbin yarn_v
   formulas="$(brew list --formula 2>/dev/null | grep -E '^node(@[0-9.]+)?$' || true)"
@@ -370,20 +700,24 @@ cleanup_npm_yarn_all_brew() {
     [[ -n "$prefix" && -d "$prefix" ]] || continue
     vbin="$prefix/bin"
     if [[ -x "$vbin/npm" ]]; then
-      run_cmd "($formula) npm cache clean --force" "$vbin/npm" cache clean --force
+      run_cmd "($formula) npm cache clean --force" "$vbin/npm" cache clean --force || rc=$?
     fi
     if [[ -x "$vbin/yarn" ]]; then
       yarn_v="$("$vbin/yarn" --version 2>/dev/null || echo 0)"
       if [[ "${yarn_v%%.*}" == "1" ]]; then
-        run_cmd "($formula) yarn cache clean" "$vbin/yarn" cache clean
+        run_cmd "($formula) yarn cache clean" "$vbin/yarn" cache clean || rc=$?
       else
-        run_cmd "($formula) yarn cache clean --all" "$vbin/yarn" cache clean --all
+        run_cmd "($formula) yarn cache clean --all" "$vbin/yarn" cache clean --all || rc=$?
       fi
     fi
   done <<< "$formulas"
+  return $rc
 }
 
 category_npm_yarn_all_brew() {
+  if (( SCAN_ONLY )); then
+    return 0
+  fi
   section "npm/yarn (all brew Node formulas)"
   if ! have brew; then
     printf '  %sbrew not installed, skipping%s\n' "$C_DIM" "$C_RESET"
@@ -431,12 +765,12 @@ category_npm_yarn_all_brew() {
 
 cleanup_xcode_derived() {
   run_cmd "rm -rf ~/Library/Developer/Xcode/DerivedData/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/Xcode/DerivedData/"*'
+    zsh -c 'rm -rf "$HOME/Library/Developer/Xcode/DerivedData/"*(DN)'
 }
 
 cleanup_xcode_archives() {
   run_cmd "rm -rf ~/Library/Developer/Xcode/Archives/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/Xcode/Archives/"*'
+    zsh -c 'rm -rf "$HOME/Library/Developer/Xcode/Archives/"*(DN)'
 }
 
 cleanup_ios_sim() {
@@ -458,11 +792,21 @@ category_xcode_derived() {
 category_xcode_archives() {
   local name="Xcode Archives"
   local p="$HOME/Library/Developer/Xcode/Archives"
+  local before
+  before="$(du_safe "$p")"
+  if (( SCAN_ONLY )); then
+    if (( before > 0 )); then
+      printf '  %-36s %s%10s%s\n' "$name" "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + before ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=xcode_archives bytes=$before"
+    fi
+    return 0
+  fi
+
   section "$name"
   printf '  %sWARNING: archives are your App Store submission records.%s\n' "$C_RED" "$C_RESET"
   printf '  Location: %s\n' "$p"
-  local before
-  before="$(du_safe "$p")"
   printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
   if (( before == 0 )); then
     printf '  %salready empty, skipping%s\n' "$C_DIM" "$C_RESET"
@@ -477,8 +821,8 @@ category_xcode_archives() {
 
   # Second prompt: require the literal string DELETE even under --yes.
   printf '  %sType DELETE (all caps) to confirm:%s ' "$C_RED" "$C_RESET"
-  local confirm_text
-  read -r confirm_text
+  local confirm_text=""
+  read -r confirm_text || confirm_text=""
   if [[ "$confirm_text" != "DELETE" ]]; then
     printf '  aborted (did not type DELETE)\n'
     log DECLINE "category=xcode_archives stage=double_prompt"
@@ -546,11 +890,13 @@ cleanup_android_build() {
 cleanup_expo_metro() {
   # ~/.expo is user-level state; some of it is caches, some is auth.
   # Safer: wipe the cache subdir only, not the whole ~/.expo.
+  local rc=0
   run_cmd "rm -rf ~/.expo/cache" \
-    zsh -c 'rm -rf "$HOME/.expo/cache"'
-  run_cmd "rm -rf /tmp/metro-*"      zsh -c 'rm -rf /tmp/metro-*'
-  run_cmd "rm -rf /tmp/haste-map-*"  zsh -c 'rm -rf /tmp/haste-map-*'
-  run_cmd "rm -rf /tmp/react-*"      zsh -c 'rm -rf /tmp/react-*'
+    zsh -c 'rm -rf "$HOME/.expo/cache"' || rc=$?
+  run_cmd "rm -rf /tmp/metro-*"      zsh -c 'rm -rf /tmp/metro-*(N)' || rc=$?
+  run_cmd "rm -rf /tmp/haste-map-*"  zsh -c 'rm -rf /tmp/haste-map-*(N)' || rc=$?
+  run_cmd "rm -rf /tmp/react-*"      zsh -c 'rm -rf /tmp/react-*(N)' || rc=$?
+  return $rc
 }
 
 cleanup_pip_cache() {
@@ -564,7 +910,7 @@ cleanup_pip_cache() {
 
 cleanup_trash() {
   run_cmd "rm -rf ~/.Trash/*" \
-    zsh -c 'rm -rf "$HOME/.Trash/"*'
+    zsh -c 'rm -rf "$HOME/.Trash/"*(DN)'
 }
 
 category_gradle() {
@@ -582,6 +928,15 @@ category_expo_metro() {
   for p in "$HOME/.expo/cache" /tmp/metro-* /tmp/haste-map-* /tmp/react-*; do
     [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
   done
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "Expo / Metro" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=expo_metro bytes=$total"
+    fi
+    return 0
+  fi
   section "Expo / Metro"
   printf '  ~/.expo/cache, /tmp/metro-*, /tmp/haste-map-*, /tmp/react-*\n'
   printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
@@ -605,6 +960,19 @@ category_expo_metro() {
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
   printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
   log CLEAN "category=expo_metro freed_bytes=$freed"
+}
+
+cleanup_uv_cache() {
+  if have uv; then
+    run_cmd "uv cache clean" uv cache clean
+  elif [[ -d "$HOME/.cache/uv" ]]; then
+    run_cmd "rm -rf ~/.cache/uv" zsh -c 'rm -rf "$HOME/.cache/uv"'
+  fi
+}
+
+category_uv_cache() {
+  run_category "uv cache" "uv Python package, wheel, and environment cache" \
+    "$HOME/.cache/uv" cleanup_uv_cache
 }
 
 category_pip_cache() {
@@ -642,8 +1010,11 @@ category_app_caches() {
     "com.anthropic.claudefordesktop"
     "com.apple.Music"
     composer
+    deno
+    "Claude"
     "Docker Desktop"
     docker-secrets-engine
+    dotslash
     eas-cli
     FamilyCircle
     familycircled
@@ -671,6 +1042,13 @@ category_app_caches() {
     com.google.GoogleUpdater
     com.plausiblelabs.crashreporter.data
     com.github.CopilotForXcode
+    # Owned by other categories, which have their own prompt, --skip key and
+    # pre-delete steps (sccache server stop, bazel shutdown). Spec 2026-05-07
+    # § Reconciliation: each cache is governed by exactly one prompt.
+    bazel               # category_bazel
+    CocoaPods           # category_cocoapods
+    go-build            # category_go_caches (default GOCACHE)
+    Mozilla.sccache     # category_sccache
   )
 
   # Returns 0 (denied) if the child name matches a literal deny entry or a
@@ -710,6 +1088,16 @@ category_app_caches() {
     total=$(( total + $(du_safe "$child") ))
   done
 
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "macOS app caches" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=app_caches bytes=$total"
+    fi
+    return 0
+  fi
+
   section "macOS app caches"
   printf '  ~/Library/Caches — immediate children (denylist-filtered)\n'
   printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
@@ -725,14 +1113,14 @@ category_app_caches() {
   fi
 
   # ── cleanup ────────────────────────────────────────────────────────────
-  local before="$total"
+  local before="$total" rc=0
   for child in "$CACHES_DIR"/*(N/); do
     name="${child:t}"
 
     # Special case: Google/ — sub-iterate with Android Studio check
     if [[ "$name" == "Google" ]]; then
       # Check if Android Studio is running
-      if pgrep -f '/Applications/Android Studio.app' >/dev/null 2>&1; then
+      if pgrep -f '^/Applications/Android Studio.app/Contents/MacOS/' >/dev/null 2>&1; then
         printf '  %sWARNING:%s Android Studio is running. Close it before clearing its caches; skipping Google/AndroidStudio*/\n' \
           "$C_YELLOW" "$C_RESET"
         log SKIP "category=app_caches reason=android_studio_running entry=Google/AndroidStudio*"
@@ -743,13 +1131,13 @@ category_app_caches() {
           [[ -e "$as_sub" ]] || continue
           local as_name="${as_sub:t}"
           run_cmd "rm -rf ~/Library/Caches/Google/$as_name" \
-            zsh -c "rm -rf ${(q)as_sub}"
+            zsh -c "rm -rf ${(q)as_sub}" || rc=$?
         done
       fi
       # Always attempt Google/Chrome (browser HTTP cache, no IDE-lock concern)
       if [[ -e "$child/Chrome" ]]; then
         run_cmd "rm -rf ~/Library/Caches/Google/Chrome" \
-          zsh -c "rm -rf ${(q)child}/Chrome"
+          zsh -c "rm -rf ${(q)child}/Chrome" || rc=$?
       fi
       # Any other Google/ child defaults to DENY — do nothing
       continue
@@ -761,7 +1149,7 @@ category_app_caches() {
     fi
 
     run_cmd "rm -rf ~/Library/Caches/$name" \
-      zsh -c "rm -rf ${(q)child}"
+      zsh -c "rm -rf ${(q)child}" || rc=$?
   done
 
   # ── measure freed ─────────────────────────────────────────────────────
@@ -781,6 +1169,10 @@ category_app_caches() {
 
   local freed=$(( before - after ))
   (( freed < 0 )) && freed=0
+  if (( rc != 0 )); then
+    report_failed_cleanup app_caches "$rc" "$freed"
+    return 0
+  fi
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
   printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
@@ -803,16 +1195,17 @@ _temp_size_parent() {
   [[ -d "$parent" ]] || { echo 0; return; }
   local me
   me="$(id -un)"
-  local kb
-  kb="$(find "$parent" -mindepth 1 -maxdepth 1 -user "$me" -mtime +7 -print0 2>/dev/null \
-        | xargs -0 /usr/bin/du -sk 2>/dev/null \
+  local kb=""
+  kb="$( (find "$parent" -mindepth 1 -maxdepth 1 -user "$me" -mtime +7 -print0 2>/dev/null \
+        | xargs -0 /usr/bin/du -sk 2>/dev/null || true) \
         | /usr/bin/awk '{s+=$1} END{print s+0}')"
   echo "$(( ${kb:-0} * 1024 ))"
 }
 
 category_temp() {
   local tmp_dir="/tmp"
-  local user_tmp="${TMPDIR%/}"
+  local user_tmp="${TMPDIR:-}"
+  user_tmp="${user_tmp%/}"
   # Resolve /tmp -> /private/tmp on macOS for consistent comparison.
   # readlink returns a relative path ("private/tmp") on macOS, so prepend / if needed.
   if [[ -L "$tmp_dir" ]]; then
@@ -829,6 +1222,16 @@ category_temp() {
   if [[ -n "$user_tmp" && "$user_tmp" != "$tmp_dir" ]]; then
     sz="$(_temp_size_parent "$user_tmp")"
     total=$(( total + sz ))
+  fi
+
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "Temp directories" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=temp bytes=$total"
+    fi
+    return 0
   fi
 
   section "Temp directories"
@@ -877,7 +1280,6 @@ category_dev_dotcaches() {
   # Hardcoded list of known-safe cache subpaths under $HOME.
   # Each entry is a full subpath; no globbing of $HOME.
   local -a DEV_DOTCACHE_PATHS=(
-    "$HOME/.cache/uv"
     "$HOME/.cache/puppeteer"
     "$HOME/.cache/chrome-devtools-mcp"
     "$HOME/.cache/node"
@@ -890,7 +1292,6 @@ category_dev_dotcaches() {
     "$HOME/.cache/zed"
     "$HOME/.cache/github-copilot"
     "$HOME/.cache/phpactor"
-    "$HOME/.bun/install/cache"
     "$HOME/.bundle/cache"
     "$HOME/.gem/specs"
     "$HOME/.gluestack/cache"
@@ -921,8 +1322,18 @@ category_dev_dotcaches() {
     [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
   done
 
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "Dev dotfolder caches" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=dev_dotcaches bytes=$total"
+    fi
+    return 0
+  fi
+
   section "Dev dotfolder caches"
-  printf '  Hardcoded cache subpaths under ~/ (uv, bun, m2, pub, nuget, sbt, terraform, zig, etc.)\n'
+  printf '  Hardcoded cache subpaths under ~/ (m2, pub, nuget, sbt, terraform, zig, etc.)\n'
   printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
   if (( total == 0 )); then
     printf '  %salready empty, skipping%s\n' "$C_DIM" "$C_RESET"
@@ -935,7 +1346,7 @@ category_dev_dotcaches() {
     return 0
   fi
 
-  local before="$total"
+  local before="$total" rc=0
   for p in "${DEV_DOTCACHE_PATHS[@]}"; do
     if [[ ! -e "$p" ]]; then
       # Strip $HOME prefix for a readable relative path in the log
@@ -944,7 +1355,7 @@ category_dev_dotcaches() {
       continue
     fi
     local rel="${p#$HOME/}"
-    run_cmd "rm -rf ~/$rel" zsh -c "rm -rf ${(q)p}"
+    run_cmd "rm -rf ~/$rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
 
   local after=0
@@ -954,6 +1365,10 @@ category_dev_dotcaches() {
 
   local freed=$(( before - after ))
   (( freed < 0 )) && freed=0
+  if (( rc != 0 )); then
+    report_failed_cleanup dev_dotcaches "$rc" "$freed"
+    return 0
+  fi
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
   printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
@@ -976,10 +1391,10 @@ cleanup_coresimulator_caches() {
   have xcrun && run_cmd "xcrun simctl shutdown all (best-effort)" \
     xcrun simctl shutdown all || true
   run_cmd "rm -rf ~/Library/Developer/CoreSimulator/Caches/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/CoreSimulator/Caches/"*'
+    zsh -c 'rm -rf "$HOME/Library/Developer/CoreSimulator/Caches/"*(DN)'
 }
 category_coresimulator_caches() {
-  if pgrep -x Simulator >/dev/null 2>&1; then
+  if (( ! SCAN_ONLY )) && pgrep -x Simulator >/dev/null 2>&1; then
     section "CoreSimulator caches"
     printf '  %sSimulator.app is running. Close it and re-run.%s\n' "$C_YELLOW" "$C_RESET"
     log SKIP "category=coresimulator_caches reason=app_running app=Simulator"
@@ -990,23 +1405,50 @@ category_coresimulator_caches() {
     "$HOME/Library/Developer/CoreSimulator/Caches" cleanup_coresimulator_caches
 }
 
+cleanup_coresimulator_logs() {
+  run_cmd "rm -rf ~/Library/Logs/CoreSimulator/*" \
+    zsh -c 'rm -rf "$HOME/Library/Logs/CoreSimulator/"*(DN)'
+}
+category_coresimulator_logs() {
+  if (( ! SCAN_ONLY )) && pgrep -x Simulator >/dev/null 2>&1; then
+    section "CoreSimulator logs"
+    printf '  %sSimulator.app is running. Close it and re-run.%s\n' "$C_YELLOW" "$C_RESET"
+    log SKIP "category=coresimulator_logs reason=app_running app=Simulator"
+    return 0
+  fi
+  run_category "CoreSimulator logs" \
+    "iOS Simulator runtime and crash logs (~/Library/Logs/CoreSimulator)" \
+    "$HOME/Library/Logs/CoreSimulator" cleanup_coresimulator_logs
+}
+
 cleanup_xctest_xcpg_devices() {
+  local rc=0
   run_cmd "rm -rf ~/Library/Developer/XCTestDevices/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/XCTestDevices/"*'
+    zsh -c 'rm -rf "$HOME/Library/Developer/XCTestDevices/"*(DN)' || rc=$?
   run_cmd "rm -rf ~/Library/Developer/XCPGDevices/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/XCPGDevices/"*'
+    zsh -c 'rm -rf "$HOME/Library/Developer/XCPGDevices/"*(DN)' || rc=$?
+  return $rc
 }
 category_xctest_xcpg_devices() {
+  local total=0 p
+  for p in "$HOME/Library/Developer/XCTestDevices" "$HOME/Library/Developer/XCPGDevices"; do
+    [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
+  done
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "Xcode test/playground devices" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=xctest_xcpg_devices bytes=$total"
+    fi
+    return 0
+  fi
   if pgrep -x Xcode >/dev/null 2>&1; then
     section "Xcode test/playground devices"
     printf '  %sXcode is running. Close it and re-run.%s\n' "$C_YELLOW" "$C_RESET"
     log SKIP "category=xctest_xcpg_devices reason=app_running app=Xcode"
     return 0
   fi
-  local total=0 p
-  for p in "$HOME/Library/Developer/XCTestDevices" "$HOME/Library/Developer/XCPGDevices"; do
-    [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
-  done
   section "Xcode test/playground devices"
   printf '  ~/Library/Developer/{XCTestDevices,XCPGDevices} — recreated on next test/preview run\n'
   printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
@@ -1034,10 +1476,10 @@ category_xctest_xcpg_devices() {
 
 cleanup_xcode_dt_cache() {
   run_cmd "rm -rf ~/Library/Caches/com.apple.dt.Xcode/*" \
-    zsh -c 'rm -rf "$HOME/Library/Caches/com.apple.dt.Xcode/"*'
+    zsh -c 'rm -rf "$HOME/Library/Caches/com.apple.dt.Xcode/"*(DN)'
 }
 category_xcode_dt_cache() {
-  if pgrep -x Xcode >/dev/null 2>&1; then
+  if (( ! SCAN_ONLY )) && pgrep -x Xcode >/dev/null 2>&1; then
     section "Xcode app cache"
     printf '  %sXcode is running. Close it and re-run.%s\n' "$C_YELLOW" "$C_RESET"
     log SKIP "category=xcode_dt_cache reason=app_running app=Xcode"
@@ -1050,7 +1492,7 @@ category_xcode_dt_cache() {
 
 cleanup_xcode_device_logs() {
   run_cmd "rm -rf ~/Library/Developer/Xcode/DeviceLogs/*" \
-    zsh -c 'rm -rf "$HOME/Library/Developer/Xcode/DeviceLogs/"*'
+    zsh -c 'rm -rf "$HOME/Library/Developer/Xcode/DeviceLogs/"*(DN)'
 }
 category_xcode_device_logs() {
   run_category "Xcode iOS device logs" \
@@ -1092,16 +1534,27 @@ category_ccache() {
 }
 
 cleanup_cargo_registry() {
+  local rc=0
   run_cmd "rm -rf ~/.cargo/registry/cache" \
-    zsh -c 'rm -rf "$HOME/.cargo/registry/cache"'
+    zsh -c 'rm -rf "$HOME/.cargo/registry/cache"' || rc=$?
   run_cmd "rm -rf ~/.cargo/registry/src" \
-    zsh -c 'rm -rf "$HOME/.cargo/registry/src"'
+    zsh -c 'rm -rf "$HOME/.cargo/registry/src"' || rc=$?
+  return $rc
 }
 category_cargo_registry() {
   local total=0 p
   for p in "$HOME/.cargo/registry/cache" "$HOME/.cargo/registry/src"; do
     [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
   done
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "Cargo registry" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=cargo_registry bytes=$total"
+    fi
+    return 0
+  fi
   section "Cargo registry"
   printf '  ~/.cargo/registry/{cache,src} — re-downloaded on next build\n'
   printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
@@ -1128,14 +1581,18 @@ category_cargo_registry() {
 }
 
 cleanup_go_caches() {
+  local rc=0
   have go || { log SKIP "category=go_caches reason=tool_not_installed"; return 0; }
-  run_cmd "go clean -modcache" go clean -modcache
-  run_cmd "go clean -cache"    go clean -cache
+  run_cmd "go clean -modcache" go clean -modcache || rc=$?
+  run_cmd "go clean -cache"    go clean -cache || rc=$?
+  return $rc
 }
 category_go_caches() {
   if ! have go; then
-    section "Go caches"
-    printf '  %sgo not installed, skipping%s\n' "$C_DIM" "$C_RESET"
+    if (( ! SCAN_ONLY )); then
+      section "Go caches"
+      printf '  %sgo not installed, skipping%s\n' "$C_DIM" "$C_RESET"
+    fi
     log SKIP "category=go_caches reason=tool_not_installed"
     return 0
   fi
@@ -1143,20 +1600,33 @@ category_go_caches() {
   mod_path="$(go env GOMODCACHE 2>/dev/null || true)"
   build_path="$(go env GOCACHE 2>/dev/null || true)"
   if [[ -z "$mod_path" ]]; then
-    section "Go caches"
-    printf '  %sgo env GOMODCACHE returned empty, skipping%s\n' "$C_YELLOW" "$C_RESET"
+    if (( ! SCAN_ONLY )); then
+      section "Go caches"
+      printf '  %sgo env GOMODCACHE returned empty, skipping%s\n' "$C_YELLOW" "$C_RESET"
+    fi
     log SKIP "category=go_caches reason=tool_error key=GOMODCACHE"
     return 0
   fi
   if [[ -z "$build_path" ]]; then
-    section "Go caches"
-    printf '  %sgo env GOCACHE returned empty, skipping%s\n' "$C_YELLOW" "$C_RESET"
+    if (( ! SCAN_ONLY )); then
+      section "Go caches"
+      printf '  %sgo env GOCACHE returned empty, skipping%s\n' "$C_YELLOW" "$C_RESET"
+    fi
     log SKIP "category=go_caches reason=tool_error key=GOCACHE"
     return 0
   fi
   for p in "$mod_path" "$build_path"; do
     [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
   done
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "Go caches" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=go_caches bytes=$total"
+    fi
+    return 0
+  fi
   section "Go caches"
   printf '  GOMODCACHE=%s\n' "$mod_path"
   printf '  GOCACHE=%s\n' "$build_path"
@@ -1208,7 +1678,7 @@ cleanup_bazel() {
     run_cmd "bazel shutdown (best-effort)" bazel shutdown || true
   fi
   local rc=0 p partial=0
-  for p in "/private/var/tmp/_bazel_$USER" "$HOME/Library/Caches/bazel"; do
+  for p in "/private/var/tmp/_bazel_${USER:-$(id -un)}" "$HOME/Library/Caches/bazel"; do
     [[ -d "$p" ]] || continue
     local rel
     case "$p" in
@@ -1220,22 +1690,33 @@ cleanup_bazel() {
   if (( partial )); then
     printf '  %sWARNING:%s Bazel cache partially deleted — daemon or IDE held file locks.\n' "$C_RED" "$C_RESET"
     printf '           Close your IDE, then re-run: %sbazel shutdown && rm -rf /private/var/tmp/_bazel_%s%s\n' \
-      "$C_BOLD" "$USER" "$C_RESET"
+      "$C_BOLD" "${USER:-$(id -un)}" "$C_RESET"
     log WARN "category=bazel partial_delete=true"
   fi
   return $rc
 }
 category_bazel() {
   if ! have bazel; then
-    section "Bazel cache"
-    printf '  %sbazel not installed, skipping%s\n' "$C_DIM" "$C_RESET"
+    if (( ! SCAN_ONLY )); then
+      section "Bazel cache"
+      printf '  %sbazel not installed, skipping%s\n' "$C_DIM" "$C_RESET"
+    fi
     log SKIP "category=bazel reason=tool_not_installed"
     return 0
   fi
   local total=0 p
-  for p in "/private/var/tmp/_bazel_$USER" "$HOME/Library/Caches/bazel"; do
+  for p in "/private/var/tmp/_bazel_${USER:-$(id -un)}" "$HOME/Library/Caches/bazel"; do
     [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
   done
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "Bazel cache" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=bazel bytes=$total"
+    fi
+    return 0
+  fi
   section "Bazel cache"
   printf '  /private/var/tmp/_bazel_%s and ~/Library/Caches/bazel\n' "$USER"
   printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
@@ -1248,9 +1729,9 @@ category_bazel() {
     log DECLINE "category=bazel size_bytes=$total"
     return 0
   fi
-  cleanup_bazel || { log ERROR "category=bazel rc=$?"; }
+  cleanup_bazel || { log ERROR "category=bazel rc=$?"; return 0; }
   local after=0
-  for p in "/private/var/tmp/_bazel_$USER" "$HOME/Library/Caches/bazel"; do
+  for p in "/private/var/tmp/_bazel_${USER:-$(id -un)}" "$HOME/Library/Caches/bazel"; do
     [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
   done
   local freed=$(( total - after ))
@@ -1266,11 +1747,21 @@ category_bazel() {
 # NEVER rm a VM disk image file — corrupts the VM. Always use the tool's CLI.
 # --include-volumes flag (off by default) gates Docker/Podman volume pruning.
 
+_VM_PRUNED=0  # set by _vm_cleanup_one: 1 only when the prune was confirmed and succeeded
 _vm_cleanup_one() {
   # _vm_cleanup_one <tool-name> <disk-image-path> <prune-cmd...>
   local tool="$1" disk="$2"; shift 2
   local before=0 after=0
+  _VM_PRUNED=0
   [[ -e "$disk" ]] && before=$(du_safe "$disk")
+  if (( SCAN_ONLY )); then
+    if (( before > 0 )); then
+      printf '  %-36s %s%10s%s\n' "Container VM: $tool" "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + before ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+    fi
+    return 0
+  fi
   printf '  %s%s%s — disk: %s, image size: %s%s%s\n' \
     "$C_BOLD" "$tool" "$C_RESET" "$disk" "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
   if ! confirm "Prune $tool?"; then
@@ -1285,6 +1776,7 @@ _vm_cleanup_one() {
     log ERROR "category=container_vms tool=$tool rc=$rc"
     return 0
   fi
+  _VM_PRUNED=1
   local freed=$(( before - after ))
   (( freed < 0 )) && freed=0
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
@@ -1293,16 +1785,18 @@ _vm_cleanup_one() {
 }
 
 category_container_vms() {
-  section "Container VM disk images"
-  printf '  Docker / OrbStack / Colima / Lima / Podman — uses each tool'\''s prune command.\n'
-  if (( INCLUDE_VOLUMES )); then
-    printf '  %s--include-volumes ON: Docker/Podman will also prune named volumes.%s\n' \
-      "$C_RED" "$C_RESET"
-  else
-    printf '  %s(volumes preserved; pass --include-volumes to also prune them)%s\n' \
-      "$C_DIM" "$C_RESET"
+  if (( ! SCAN_ONLY )); then
+    section "Container VM disk images"
+    printf '  Docker / OrbStack / Colima / Lima / Podman — uses each tool'\''s prune command.\n'
+    if (( INCLUDE_VOLUMES )); then
+      printf '  %s--include-volumes ON: Docker/Podman will also prune named volumes.%s\n' \
+        "$C_RED" "$C_RESET"
+    else
+      printf '  %s(volumes preserved; pass --include-volumes to also prune them)%s\n' \
+        "$C_DIM" "$C_RESET"
+    fi
   fi
-  local any=0
+  local any=0 rc=0
 
   if have docker && docker info >/dev/null 2>&1; then
     any=1
@@ -1316,8 +1810,11 @@ category_container_vms() {
         docker system prune -a -f
     fi
     # Reclaim helper container actually shrinks Docker.raw on host.
-    run_cmd "docker reclaim-space helper" \
-      docker run --rm --privileged --pid=host docker/desktop-reclaim-space || true
+    # Only after a confirmed, successful prune — never in --scan or on decline.
+    if (( ! SCAN_ONLY && _VM_PRUNED )); then
+      run_cmd "docker reclaim-space helper" \
+        docker run --rm --privileged --pid=host docker/desktop-reclaim-space || true
+    fi
   else
     log SKIP "category=container_vms tool=docker reason=tool_not_installed"
   fi
@@ -1334,10 +1831,37 @@ category_container_vms() {
     any=1
     _vm_cleanup_one colima "$HOME/.colima/_lima/colima/diffdisk" \
       colima prune
+    # Colima downloaded rootfs/ISO image cache
+    if [[ -d "$HOME/.colima/_cache" ]]; then
+      local col_sz=$(du_safe "$HOME/.colima/_cache")
+      if (( col_sz > 0 )); then
+        if (( SCAN_ONLY )); then
+          printf '  %-36s %s%10s%s\n' "Colima download cache" "$C_YELLOW" "$(human_size "$col_sz")" "$C_RESET"
+          SCAN_TOTAL=$(( SCAN_TOTAL + col_sz ))
+          SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+        elif confirm "Clean Colima download cache (~/.colima/_cache)?"; then
+          local col_rc=0
+          run_cmd "rm -rf ~/.colima/_cache/*" zsh -c 'rm -rf "$HOME/.colima/_cache/"*(DN)' || col_rc=$?
+          if (( col_rc )); then
+            log ERROR "category=container_vms tool=colima_cache rc=$col_rc"
+            rc=$col_rc
+          else
+            local col_after=$(du_safe "$HOME/.colima/_cache")
+            local col_freed=$(( col_sz - col_after ))
+            (( col_freed < 0 )) && col_freed=0
+            TOTAL_FREED=$(( TOTAL_FREED + col_freed ))
+            printf '  %s→ Colima cache cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$col_freed")" "$C_RESET"
+            log CLEAN "category=container_vms tool=colima_cache freed_bytes=$col_freed"
+          fi
+        fi
+      fi
+    fi
     # fstrim inside the VM releases blocks; restart needed for full reclaim.
-    run_cmd "colima ssh fstrim" colima ssh -- sudo fstrim -a || true
-    printf '  %s(restart Colima with `colima stop && colima start` for full reclaim)%s\n' \
-      "$C_DIM" "$C_RESET"
+    if (( ! SCAN_ONLY )); then
+      run_cmd "colima ssh fstrim" colima ssh -- sudo fstrim -a || true
+      printf '  %s(restart Colima with `colima stop && colima start` for full reclaim)%s\n' \
+        "$C_DIM" "$C_RESET"
+    fi
   else
     log SKIP "category=container_vms tool=colima reason=tool_not_installed"
   fi
@@ -1367,9 +1891,10 @@ category_container_vms() {
     log SKIP "category=container_vms tool=podman reason=tool_not_installed"
   fi
 
-  if (( any == 0 )); then
+  if (( ! SCAN_ONLY && any == 0 )); then
     printf '  %sno container tools installed, skipping%s\n' "$C_DIM" "$C_RESET"
   fi
+  return $rc
 }
 
 # ── Browser caches (Tier 2) ──
@@ -1386,7 +1911,7 @@ _browser_clean_chromium() {
     log SKIP "category=browser_caches browser=$key reason=tool_not_installed"
     return 0
   fi
-  if pgrep -f "$pgpat" >/dev/null 2>&1; then
+  if (( ! SCAN_ONLY )) && pgrep -f "$pgpat" >/dev/null 2>&1; then
     printf '  %s%s is running, skipping its caches.%s\n' "$C_YELLOW" "$key" "$C_RESET"
     log SKIP "category=browser_caches browser=$key reason=app_running"
     return 0
@@ -1423,24 +1948,32 @@ _browser_clean_chromium() {
     log SKIP "category=browser_caches browser=$key reason=empty"
     return 0
   fi
+  if (( SCAN_ONLY )); then
+    printf '  %-36s %s%10s%s\n' "Browser: $key" "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
+    SCAN_TOTAL=$(( SCAN_TOTAL + before ))
+    SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+    return 0
+  fi
   printf '  %s%s%s — size: %s%s%s\n' "$C_BOLD" "$key" "$C_RESET" \
     "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
   if ! confirm "Clean $key caches?"; then
     log DECLINE "category=browser_caches browser=$key size_bytes=$before"
     return 0
   fi
+  local rc=0
   for prof in "$udir"/Default(N/) "$udir"/Profile\ *(N/); do
     for leaf in "${leaves[@]}"; do
       target="$prof/$leaf"
       [[ -e "$target" ]] || continue
-      run_cmd "rm -rf <profile>/$leaf" zsh -c "rm -rf ${(q)target}"
+      run_cmd "rm -rf <profile>/$leaf" zsh -c "rm -rf ${(q)target}" || rc=$?
     done
   done
   for leaf in "${top_leaves[@]}"; do
     target="$udir/$leaf"
     [[ -e "$target" ]] || continue
-    run_cmd "rm -rf <browser>/$leaf" zsh -c "rm -rf ${(q)target}"
+    run_cmd "rm -rf <browser>/$leaf" zsh -c "rm -rf ${(q)target}" || rc=$?
   done
+  (( rc == 0 )) || { log ERROR "category=browser_caches browser=$key rc=$rc"; return $rc; }
   for prof in "$udir"/Default(N/) "$udir"/Profile\ *(N/); do
     for leaf in "${leaves[@]}"; do
       target="$prof/$leaf"
@@ -1464,7 +1997,7 @@ _browser_clean_safari() {
     log SKIP "category=browser_caches browser=safari reason=tool_not_installed"
     return 0
   fi
-  if pgrep -x Safari >/dev/null 2>&1; then
+  if (( ! SCAN_ONLY )) && pgrep -x Safari >/dev/null 2>&1; then
     printf '  %sSafari is running, skipping its caches.%s\n' "$C_YELLOW" "$C_RESET"
     log SKIP "category=browser_caches browser=safari reason=app_running"
     return 0
@@ -1474,13 +2007,21 @@ _browser_clean_safari() {
     log SKIP "category=browser_caches browser=safari reason=empty"
     return 0
   fi
+  if (( SCAN_ONLY )); then
+    printf '  %-36s %s%10s%s\n' "Browser: Safari" "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
+    SCAN_TOTAL=$(( SCAN_TOTAL + before ))
+    SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+    return 0
+  fi
   printf '  %sSafari%s — size: %s%s%s\n' "$C_BOLD" "$C_RESET" \
     "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
   if ! confirm "Clean Safari caches?"; then
     log DECLINE "category=browser_caches browser=safari size_bytes=$before"
     return 0
   fi
-  run_cmd "rm -rf <safari cache>/*" zsh -c "rm -rf ${(q)cdir}/*"
+  local rc=0
+  run_cmd "rm -rf <safari cache>/*" zsh -c "rm -rf ${(q)cdir}/*(DN)" || rc=$?
+  (( rc == 0 )) || { log ERROR "category=browser_caches browser=safari rc=$rc"; return $rc; }
   local after; after=$(du_safe "$cdir")
   local freed=$(( before - after ))
   (( freed < 0 )) && freed=0
@@ -1495,7 +2036,7 @@ _browser_clean_firefox() {
     log SKIP "category=browser_caches browser=firefox reason=tool_not_installed"
     return 0
   fi
-  if pgrep -x firefox >/dev/null 2>&1 || pgrep -f '/Applications/Firefox.app' >/dev/null 2>&1; then
+  if (( ! SCAN_ONLY )) && { pgrep -x firefox >/dev/null 2>&1 || pgrep -f '^/Applications/Firefox.app/Contents/MacOS/' >/dev/null 2>&1; }; then
     printf '  %sFirefox is running, skipping its caches.%s\n' "$C_YELLOW" "$C_RESET"
     log SKIP "category=browser_caches browser=firefox reason=app_running"
     return 0
@@ -1512,19 +2053,27 @@ _browser_clean_firefox() {
     log SKIP "category=browser_caches browser=firefox reason=empty"
     return 0
   fi
+  if (( SCAN_ONLY )); then
+    printf '  %-36s %s%10s%s\n' "Browser: Firefox" "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
+    SCAN_TOTAL=$(( SCAN_TOTAL + before ))
+    SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+    return 0
+  fi
   printf '  %sFirefox%s — size: %s%s%s\n' "$C_BOLD" "$C_RESET" \
     "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
   if ! confirm "Clean Firefox caches?"; then
     log DECLINE "category=browser_caches browser=firefox size_bytes=$before"
     return 0
   fi
+  local rc=0
   for prof in "$root"/*.default-release(N/) "$root"/*.default(N/) "$root"/*.dev-edition-default(N/); do
     for leaf in "${ff_leaves[@]}"; do
       target="$prof/$leaf"
       [[ -e "$target" ]] || continue
-      run_cmd "rm -rf <profile>/$leaf" zsh -c "rm -rf ${(q)target}"
+      run_cmd "rm -rf <profile>/$leaf" zsh -c "rm -rf ${(q)target}" || rc=$?
     done
   done
+  (( rc == 0 )) || { log ERROR "category=browser_caches browser=firefox rc=$rc"; return $rc; }
   for prof in "$root"/*.default-release(N/) "$root"/*.default(N/) "$root"/*.dev-edition-default(N/); do
     for leaf in "${ff_leaves[@]}"; do
       target="$prof/$leaf"
@@ -1548,7 +2097,7 @@ _browser_clean_electron() {
     log SKIP "category=browser_caches browser=$slug reason=tool_not_installed"
     return 0
   fi
-  if pgrep -f "$pgrep_pat" >/dev/null 2>&1; then
+  if (( ! SCAN_ONLY )) && pgrep -f "$pgrep_pat" >/dev/null 2>&1; then
     printf '  %s%s is running, skipping its caches.%s\n' "$C_YELLOW" "$display" "$C_RESET"
     log SKIP "category=browser_caches browser=$slug reason=app_running"
     return 0
@@ -1562,6 +2111,18 @@ _browser_clean_electron() {
     "DawnWebGPUCache"
     "CachedData"
   )
+  case "$slug" in
+    vscode|vscode_insiders|cursor|windsurf|devin|devin_next)
+      # Завантажені архіви розширень; встановлені розширення зберігаються окремо.
+      leaves+=("CachedExtensionVSIXs")
+      ;;
+  esac
+  case "$slug" in
+    devin|devin_next)
+      # Зберігаємо стан вебзастосунків і розмов нових редакторів.
+      leaves=("${(@)leaves:#Service Worker}")
+      ;;
+  esac
   local before=0 after=0 leaf target
   for leaf in "${leaves[@]}"; do
     target="$base/$leaf"
@@ -1571,17 +2132,25 @@ _browser_clean_electron() {
     log SKIP "category=browser_caches browser=$slug reason=empty"
     return 0
   fi
+  if (( SCAN_ONLY )); then
+    printf '  %-36s %s%10s%s\n' "App cache: $display" "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
+    SCAN_TOTAL=$(( SCAN_TOTAL + before ))
+    SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+    return 0
+  fi
   printf '  %s%s%s — size: %s%s%s\n' "$C_BOLD" "$display" "$C_RESET" \
     "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
   if ! confirm "Clean $display caches?"; then
     log DECLINE "category=browser_caches browser=$slug size_bytes=$before"
     return 0
   fi
+  local rc=0
   for leaf in "${leaves[@]}"; do
     target="$base/$leaf"
     [[ -e "$target" ]] || continue
-    run_cmd "rm -rf <$slug>/$leaf" zsh -c "rm -rf ${(q)target}"
+    run_cmd "rm -rf <$slug>/$leaf" zsh -c "rm -rf ${(q)target}" || rc=$?
   done
+  (( rc == 0 )) || { log ERROR "category=browser_caches browser=$slug rc=$rc"; return $rc; }
   for leaf in "${leaves[@]}"; do
     target="$base/$leaf"
     [[ -e "$target" ]] && after=$(( after + $(du_safe "$target") ))
@@ -1601,7 +2170,7 @@ _browser_clean_slack() {
     log SKIP "category=browser_caches browser=slack reason=tool_not_installed"
     return 0
   fi
-  if pgrep -f '/Applications/Slack.app' >/dev/null 2>&1; then
+  if (( ! SCAN_ONLY )) && pgrep -f '^/Applications/Slack.app/Contents/MacOS/' >/dev/null 2>&1; then
     printf '  %sSlack is running, skipping its caches.%s\n' "$C_YELLOW" "$C_RESET"
     log SKIP "category=browser_caches browser=slack reason=app_running"
     return 0
@@ -1623,17 +2192,25 @@ _browser_clean_slack() {
     log SKIP "category=browser_caches browser=slack reason=empty"
     return 0
   fi
+  if (( SCAN_ONLY )); then
+    printf '  %-36s %s%10s%s\n' "App cache: Slack" "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
+    SCAN_TOTAL=$(( SCAN_TOTAL + before ))
+    SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+    return 0
+  fi
   printf '  %sSlack%s — size: %s%s%s\n' "$C_BOLD" "$C_RESET" \
     "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
   if ! confirm "Clean Slack caches?"; then
     log DECLINE "category=browser_caches browser=slack size_bytes=$before"
     return 0
   fi
+  local rc=0
   for leaf in "${leaves[@]}"; do
     target="$base/$leaf"
     [[ -e "$target" ]] || continue
-    run_cmd "rm -rf <slack>/$leaf" zsh -c "rm -rf ${(q)target}"
+    run_cmd "rm -rf <slack>/$leaf" zsh -c "rm -rf ${(q)target}" || rc=$?
   done
+  (( rc == 0 )) || { log ERROR "category=browser_caches browser=slack rc=$rc"; return $rc; }
   for leaf in "${leaves[@]}"; do
     target="$base/$leaf"
     [[ -e "$target" ]] && after=$(( after + $(du_safe "$target") ))
@@ -1646,58 +2223,68 @@ _browser_clean_slack() {
 }
 
 category_browser_caches() {
-  section "Browser & Electron-app caches"
-  printf '  Safari, Chrome, Arc, Edge, Brave, Firefox, Slack,\n'
-  printf '  VS Code, VS Code Insiders, Cursor, Windsurf, Discord, Teams, Notion — cache subdirs only.\n'
-  printf '  Cookies, history, logins, IndexedDB, and user data are NOT touched.\n'
+  if (( ! SCAN_ONLY )); then
+    section "Browser & Electron-app caches"
+    printf '  Safari, Chrome, Arc, Edge, Brave, Firefox, Slack,\n'
+    printf '  VS Code, VS Code Insiders, Cursor, Windsurf, Devin, Devin - Next, Discord, Teams, Notion — лише кеші.\n'
+    printf '  Cookies, history, logins, IndexedDB, and user data are NOT touched.\n'
+  fi
   local before_cleaned=$CATEGORIES_CLEANED
   local before_freed=$TOTAL_FREED
-  _browser_clean_safari
-  _browser_clean_chromium chrome '/Applications/Google Chrome.app' \
-    "$HOME/Library/Application Support/Google/Chrome"
-  _browser_clean_chromium arc '/Applications/Arc.app' \
-    "$HOME/Library/Application Support/Arc/User Data"
-  _browser_clean_chromium edge '/Applications/Microsoft Edge.app' \
-    "$HOME/Library/Application Support/Microsoft Edge"
-  _browser_clean_chromium brave '/Applications/Brave Browser.app' \
-    "$HOME/Library/Application Support/BraveSoftware/Brave-Browser"
-  _browser_clean_firefox
-  _browser_clean_slack
+  local rc=0
+  _browser_clean_safari || rc=$?
+  _browser_clean_chromium chrome '^/Applications/Google Chrome.app/Contents/MacOS/' \
+    "$HOME/Library/Application Support/Google/Chrome" || rc=$?
+  _browser_clean_chromium arc '^/Applications/Arc.app/Contents/MacOS/' \
+    "$HOME/Library/Application Support/Arc/User Data" || rc=$?
+  _browser_clean_chromium edge '^/Applications/Microsoft Edge.app/Contents/MacOS/' \
+    "$HOME/Library/Application Support/Microsoft Edge" || rc=$?
+  _browser_clean_chromium brave '^/Applications/Brave Browser.app/Contents/MacOS/' \
+    "$HOME/Library/Application Support/BraveSoftware/Brave-Browser" || rc=$?
+  _browser_clean_firefox || rc=$?
+  _browser_clean_slack || rc=$?
   _browser_clean_electron vscode "VS Code" \
-    '/Applications/Visual Studio Code.app' \
-    "$HOME/Library/Application Support/Code"
+    '^/Applications/Visual Studio Code.app/Contents/MacOS/' \
+    "$HOME/Library/Application Support/Code" || rc=$?
   _browser_clean_electron vscode_insiders "VS Code Insiders" \
-    '/Applications/Visual Studio Code - Insiders.app' \
-    "$HOME/Library/Application Support/Code - Insiders"
+    '^/Applications/Visual Studio Code - Insiders.app/Contents/MacOS/' \
+    "$HOME/Library/Application Support/Code - Insiders" || rc=$?
   _browser_clean_electron cursor "Cursor" \
-    '/Applications/Cursor.app' \
-    "$HOME/Library/Application Support/Cursor"
+    '^/Applications/Cursor.app/Contents/MacOS/' \
+    "$HOME/Library/Application Support/Cursor" || rc=$?
   _browser_clean_electron windsurf "Windsurf" \
-    '/Applications/Windsurf.app' \
-    "$HOME/Library/Application Support/Windsurf"
+    '^/Applications/Windsurf.app/Contents/MacOS/' \
+    "$HOME/Library/Application Support/Windsurf" || rc=$?
+  _browser_clean_electron devin "Devin" \
+    '^(/Applications|/Users/[^/]+/Applications)/Devin\.app/Contents/' \
+    "$HOME/Library/Application Support/Devin" || rc=$?
+  _browser_clean_electron devin_next "Devin - Next" \
+    '^(/Applications|/Users/[^/]+/Applications)/Devin - Next\.app/Contents/' \
+    "$HOME/Library/Application Support/Devin - Next" || rc=$?
   _browser_clean_electron discord "Discord" \
-    '/Applications/Discord.app' \
-    "$HOME/Library/Application Support/discord"
+    '^/Applications/Discord.app/Contents/MacOS/' \
+    "$HOME/Library/Application Support/discord" || rc=$?
   _browser_clean_electron teams "Microsoft Teams" \
-    '/Applications/Microsoft Teams.app' \
-    "$HOME/Library/Application Support/Microsoft/Teams"
+    '^/Applications/Microsoft Teams.app/Contents/MacOS/' \
+    "$HOME/Library/Application Support/Microsoft/Teams" || rc=$?
   _browser_clean_electron notion "Notion" \
-    '/Applications/Notion.app' \
-    "$HOME/Library/Application Support/Notion"
+    '^/Applications/Notion.app/Contents/MacOS/' \
+    "$HOME/Library/Application Support/Notion" || rc=$?
   # Count this category as cleaned if any sub-browser produced freed bytes.
   if (( TOTAL_FREED > before_freed )); then
     CATEGORIES_CLEANED=$(( before_cleaned + 1 ))
   fi
+  return $rc
 }
 
 # ── User-app additions ──
 
 cleanup_apple_music_stream_cache() {
   run_cmd "rm -rf ~/Library/Caches/com.apple.Music/*" \
-    zsh -c 'rm -rf "$HOME/Library/Caches/com.apple.Music/"*'
+    zsh -c 'rm -rf "$HOME/Library/Caches/com.apple.Music/"*(DN)'
 }
 category_apple_music_stream_cache() {
-  if pgrep -x Music >/dev/null 2>&1; then
+  if (( ! SCAN_ONLY )) && pgrep -x Music >/dev/null 2>&1; then
     section "Apple Music stream cache"
     printf '  %sMusic.app is running. Close it and re-run.%s\n' "$C_YELLOW" "$C_RESET"
     log SKIP "category=apple_music_stream_cache reason=app_running app=Music"
@@ -1710,10 +2297,10 @@ category_apple_music_stream_cache() {
 
 cleanup_mail_downloads() {
   run_cmd "rm -rf <Mail Downloads>/*" \
-    zsh -c 'rm -rf "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads/"*'
+    zsh -c 'rm -rf "$HOME/Library/Containers/com.apple.mail/Data/Library/Mail Downloads/"*(DN)'
 }
 category_mail_downloads() {
-  if pgrep -x Mail >/dev/null 2>&1; then
+  if (( ! SCAN_ONLY )) && pgrep -x Mail >/dev/null 2>&1; then
     section "Mail Downloads"
     printf '  %sMail.app is running. Close it and re-run.%s\n' "$C_YELLOW" "$C_RESET"
     log SKIP "category=mail_downloads reason=app_running app=Mail"
@@ -1725,24 +2312,35 @@ category_mail_downloads() {
 }
 
 cleanup_diagnostic_reports() {
+  local rc=0
   run_cmd "rm -rf ~/Library/Logs/DiagnosticReports/Retired" \
-    zsh -c 'rm -rf "$HOME/Library/Logs/DiagnosticReports/Retired"'
+    zsh -c 'rm -rf "$HOME/Library/Logs/DiagnosticReports/Retired"' || rc=$?
   run_cmd "rm -f ~/Library/Logs/DiagnosticReports/*.ips ~/Library/Logs/DiagnosticReports/*.diag" \
-    zsh -c 'rm -f "$HOME/Library/Logs/DiagnosticReports/"*.ips "$HOME/Library/Logs/DiagnosticReports/"*.diag(N)'
+    zsh -c 'rm -f "$HOME/Library/Logs/DiagnosticReports/"*.ips(N) "$HOME/Library/Logs/DiagnosticReports/"*.diag(N)' || rc=$?
   if id -Gn | tr ' ' '\n' | grep -qx _analyticsusers; then
     run_cmd "rm -rf /Library/Logs/DiagnosticReports/Retired" \
-      zsh -c 'rm -rf /Library/Logs/DiagnosticReports/Retired'
+      zsh -c 'rm -rf /Library/Logs/DiagnosticReports/Retired' || rc=$?
     run_cmd "rm -f /Library/Logs/DiagnosticReports/*.ips /Library/Logs/DiagnosticReports/*.diag" \
-      zsh -c 'rm -f /Library/Logs/DiagnosticReports/*.ips /Library/Logs/DiagnosticReports/*.diag(N)'
+      zsh -c 'rm -f /Library/Logs/DiagnosticReports/*.ips(N) /Library/Logs/DiagnosticReports/*.diag(N)' || rc=$?
   else
     log SKIP "category=diagnostic_reports reason=insufficient_perms group=_analyticsusers path=/Library/Logs/DiagnosticReports"
   fi
+  return $rc
 }
 category_diagnostic_reports() {
   local total=0 p
   for p in "$HOME/Library/Logs/DiagnosticReports" "/Library/Logs/DiagnosticReports"; do
     [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
   done
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "Diagnostic reports" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=diagnostic_reports bytes=$total"
+    fi
+    return 0
+  fi
   section "Diagnostic reports"
   printf '  ~/Library/Logs/DiagnosticReports + /Library/Logs/DiagnosticReports (.ips/.diag files)\n'
   printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
@@ -1776,24 +2374,35 @@ category_diagnostic_reports() {
 # fail when products are uninstalled before next-version upgrade).
 
 cleanup_android_studio_logs() {
+  local rc=0
   run_cmd "rm -rf ~/Library/Logs/Google" \
-    zsh -c 'rm -rf "$HOME/Library/Logs/Google"'
+    zsh -c 'rm -rf "$HOME/Library/Logs/Google"' || rc=$?
   run_cmd "rm -rf ~/Library/Logs/JetBrains" \
-    zsh -c 'rm -rf "$HOME/Library/Logs/JetBrains"'
+    zsh -c 'rm -rf "$HOME/Library/Logs/JetBrains"' || rc=$?
+  return $rc
 }
 
 category_android_studio_logs() {
-  if pgrep -f "Android Studio.app" >/dev/null 2>&1; then
+  local total=0 p
+  for p in "$HOME/Library/Logs/Google" "$HOME/Library/Logs/JetBrains"; do
+    [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
+  done
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "Android Studio/IDE logs" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=android_studio_logs bytes=$total"
+    fi
+    return 0
+  fi
+  if pgrep -f '^/Applications/Android Studio.app/Contents/MacOS/' >/dev/null 2>&1; then
     section "Android Studio + JetBrains IDE logs"
     printf '  %sAndroid Studio is running. Close it and re-run.%s\n' \
       "$C_YELLOW" "$C_RESET"
     log SKIP "category=android_studio_logs reason=app_running app=AndroidStudio"
     return 0
   fi
-  local total=0 p
-  for p in "$HOME/Library/Logs/Google" "$HOME/Library/Logs/JetBrains"; do
-    [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
-  done
   section "Android Studio + JetBrains IDE logs"
   printf '  ~/Library/Logs/Google + ~/Library/Logs/JetBrains (all IDE versions)\n'
   printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
@@ -1826,7 +2435,7 @@ cleanup_intelligence_platform() {
   run_cmd "pkill -x intelligenceplatformd (best-effort)" \
     zsh -c 'pkill -x intelligenceplatformd 2>/dev/null; true'
   run_cmd "rm -rf ~/Library/IntelligencePlatform/*" \
-    zsh -c 'rm -rf "$HOME/Library/IntelligencePlatform/"*'
+    zsh -c 'rm -rf "$HOME/Library/IntelligencePlatform/"*(DN)'
 }
 
 category_intelligence_platform() {
@@ -1842,6 +2451,22 @@ category_intelligence_platform() {
 # is permanently excluded — it contains user iPhone photos with EXIF.
 
 category_wallpaper_aerials() {
+  local videos="$HOME/Library/Application Support/com.apple.wallpaper/aerials/videos"
+  local thumbs="$HOME/Library/Application Support/com.apple.wallpaper/aerials/thumbnails"
+  local total=0
+  [[ -e "$videos" ]] && total=$(( total + $(du_safe "$videos") ))
+  [[ -e "$thumbs" ]] && total=$(( total + $(du_safe "$thumbs") ))
+
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "Wallpaper aerials" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=wallpaper_aerials bytes=$total"
+    fi
+    return 0
+  fi
+
   if pgrep -x ScreenSaverEngine >/dev/null 2>&1; then
     section "Wallpaper aerials (videos + thumbnails)"
     printf '  %sScreensaver is running, skipping (file handles in use).%s\n' \
@@ -1849,11 +2474,6 @@ category_wallpaper_aerials() {
     log SKIP "category=wallpaper_aerials reason=screensaver_running"
     return 0
   fi
-  local videos="$HOME/Library/Application Support/com.apple.wallpaper/aerials/videos"
-  local thumbs="$HOME/Library/Application Support/com.apple.wallpaper/aerials/thumbnails"
-  local total=0
-  [[ -e "$videos" ]] && total=$(( total + $(du_safe "$videos") ))
-  [[ -e "$thumbs" ]] && total=$(( total + $(du_safe "$thumbs") ))
   section "Wallpaper aerials (videos + thumbnails)"
   printf '  ~/Library/Application Support/com.apple.wallpaper/aerials/{videos,thumbnails}\n'
   printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
@@ -1868,13 +2488,18 @@ category_wallpaper_aerials() {
     log DECLINE "category=wallpaper_aerials size_bytes=$total"
     return 0
   fi
-  run_cmd "rm -rf <aerials>/videos" zsh -c "rm -rf ${(q)videos}"
-  run_cmd "rm -rf <aerials>/thumbnails" zsh -c "rm -rf ${(q)thumbs}"
+  local rc=0
+  run_cmd "rm -rf <aerials>/videos" zsh -c "rm -rf ${(q)videos}" || rc=$?
+  run_cmd "rm -rf <aerials>/thumbnails" zsh -c "rm -rf ${(q)thumbs}" || rc=$?
   local after=0
   [[ -e "$videos" ]] && after=$(( after + $(du_safe "$videos") ))
   [[ -e "$thumbs" ]] && after=$(( after + $(du_safe "$thumbs") ))
   local freed=$(( total - after ))
   (( freed < 0 )) && freed=0
+  if (( rc != 0 )); then
+    report_failed_cleanup wallpaper_aerials "$rc" "$freed"
+    return 0
+  fi
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
   printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
@@ -1884,6 +2509,19 @@ category_wallpaper_aerials() {
 # ── System-state additions (Tier 2) ──
 
 category_tm_local_snapshots() {
+  if (( SCAN_ONLY )); then
+    if have tmutil; then
+      local count
+      count="$(tmutil listlocalsnapshots / 2>/dev/null \
+               | grep -c '^com.apple.TimeMachine' || true)"
+      if (( count > 0 )); then
+        printf '  %-36s %s%10s%s\n' "Time Machine ($count snapshots)" "$C_YELLOW" "APFS delta" "$C_RESET"
+        SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+        log SCAN "category=tm_local_snapshots count=$count"
+      fi
+    fi
+    return 0
+  fi
   section "Time Machine local snapshots"
   if ! have tmutil; then
     printf '  %stmutil not found, skipping%s\n' "$C_DIM" "$C_RESET"
@@ -1938,7 +2576,7 @@ category_jetbrains_caches() {
 
 cleanup_macos_software_update() {
   run_cmd "rm -rf ~/Library/Caches/com.apple.SoftwareUpdate/*" \
-    zsh -c 'rm -rf "$HOME/Library/Caches/com.apple.SoftwareUpdate/"*'
+    zsh -c 'rm -rf "$HOME/Library/Caches/com.apple.SoftwareUpdate/"*(DN)'
 }
 
 category_macos_software_update() {
@@ -1949,7 +2587,7 @@ category_macos_software_update() {
 
 cleanup_apple_maps_tiles() {
   local p="$HOME/Library/Containers/com.apple.Maps/Data/Library/Caches/com.apple.Maps/MapTiles"
-  run_cmd "rm -rf <Maps>/MapTiles/*" zsh -c "rm -rf ${(q)p}/*"
+  run_cmd "rm -rf <Maps>/MapTiles/*" zsh -c "rm -rf ${(q)p}/*(DN)"
 }
 
 category_apple_maps_tiles() {
@@ -1970,6 +2608,15 @@ category_python_extras() {
   for p in "${PATHS[@]}"; do
     [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
   done
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "Python toolchain extras" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=python_extras bytes=$total"
+    fi
+    return 0
+  fi
   section "Python toolchain extras"
   printf '  pre-commit hook venvs, Poetry, pip (XDG path)\n'
   printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
@@ -1982,10 +2629,11 @@ category_python_extras() {
     log DECLINE "category=python_extras size_bytes=$total"
     return 0
   fi
+  local rc=0
   for p in "${PATHS[@]}"; do
     [[ -e "$p" ]] || continue
     rel="${p/#$HOME/~}"
-    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}"
+    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
   local after=0
   for p in "${PATHS[@]}"; do
@@ -1993,6 +2641,10 @@ category_python_extras() {
   done
   local freed=$(( total - after ))
   (( freed < 0 )) && freed=0
+  if (( rc != 0 )); then
+    report_failed_cleanup python_extras "$rc" "$freed"
+    return 0
+  fi
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
   printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
@@ -2008,6 +2660,15 @@ category_node_extras() {
   for p in "${PATHS[@]}"; do
     [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
   done
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "Node toolchain extras" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=node_extras bytes=$total"
+    fi
+    return 0
+  fi
   section "Node toolchain extras"
   printf '  ~/Library/Caches/node-gyp, ~/.npm/_logs\n'
   printf '  Size: %s%s%s\n' "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
@@ -2020,10 +2681,11 @@ category_node_extras() {
     log DECLINE "category=node_extras size_bytes=$total"
     return 0
   fi
+  local rc=0
   for p in "${PATHS[@]}"; do
     [[ -e "$p" ]] || continue
     rel="${p/#$HOME/~}"
-    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}"
+    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
   local after=0
   for p in "${PATHS[@]}"; do
@@ -2031,10 +2693,39 @@ category_node_extras() {
   done
   local freed=$(( total - after ))
   (( freed < 0 )) && freed=0
+  if (( rc != 0 )); then
+    report_failed_cleanup node_extras "$rc" "$freed"
+    return 0
+  fi
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
   printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
   log CLEAN "category=node_extras freed_bytes=$freed"
+}
+
+category_claude_cache() {
+  local -a paths=(
+    "$HOME/.claude/cache"
+    "$HOME/.claude/paste-cache"
+    "$HOME/.claude/debug"
+  )
+  # Live Claude Code sessions source ~/.claude/shell-snapshots on every Bash call.
+  # The native install runs via ~/.local/bin/claude -> versions/<x.y.z>, so the
+  # process name is the version; match "claude" as a path component in argv
+  # too, plus the npm build (node .../claude-code/cli.js).
+  if pgrep -x claude >/dev/null 2>&1 ||
+     pgrep -f '(^|/)claude( |$)|claude-code/cli[.]js' >/dev/null 2>&1; then
+    if (( ! SCAN_ONLY )); then
+      printf '  %sWARNING:%s Claude Code is running; keeping ~/.claude/shell-snapshots (live sessions depend on it).\n' \
+        "$C_YELLOW" "$C_RESET"
+    fi
+    log SKIP "category=claude_cache reason=app_running entry=shell-snapshots"
+  else
+    paths+=("$HOME/.claude/shell-snapshots")
+  fi
+  run_paths_category "Claude Code caches" "claude_cache" \
+    "Claude Code CLI temporary caches, paste cache, and shell snapshots (~/.claude)" \
+    "${paths[@]}"
 }
 
 # AI / LLM model caches. Largest single category by reclaim potential.
@@ -2057,6 +2748,16 @@ category_llm_caches() {
   for p in "${LLM_PATHS[@]}"; do
     [[ -e "$p" ]] && total=$(( total + $(du_safe "$p") ))
   done
+
+  if (( SCAN_ONLY )); then
+    if (( total > 0 )); then
+      printf '  %-36s %s%10s%s\n' "AI / LLM model caches" "$C_YELLOW" "$(human_size "$total")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=llm_caches bytes=$total"
+    fi
+    return 0
+  fi
 
   section "AI / LLM model caches"
   printf '  Ollama, Hugging Face, PyTorch hub, Whisper, LM Studio, GPT4All, Pinokio cache\n'
@@ -2088,10 +2789,11 @@ category_llm_caches() {
     return 0
   fi
 
+  local rc=0
   for p in "${LLM_PATHS[@]}"; do
     [[ -e "$p" ]] || continue
     rel="${p/#$HOME/~}"
-    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}"
+    run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
 
   local after=0
@@ -2100,6 +2802,10 @@ category_llm_caches() {
   done
   local freed=$(( total - after ))
   (( freed < 0 )) && freed=0
+  if (( rc != 0 )); then
+    report_failed_cleanup llm_caches "$rc" "$freed"
+    return 0
+  fi
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
   printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
@@ -2107,15 +2813,33 @@ category_llm_caches() {
 }
 
 category_macos_installers() {
-  section "Stale macOS installers"
-  printf '  /Applications/Install macOS *.app — 12-15 GB stub installers\n'
   local -a installers=(/Applications/Install\ macOS\ *.app(N))
   if (( ${#installers} == 0 )); then
-    printf '  %snone present, skipping%s\n' "$C_DIM" "$C_RESET"
+    if (( ! SCAN_ONLY )); then
+      section "Stale macOS installers"
+      printf '  /Applications/Install macOS *.app — 12-15 GB stub installers\n'
+      printf '  %snone present, skipping%s\n' "$C_DIM" "$C_RESET"
+    fi
     log SKIP "category=macos_installers reason=empty"
     return 0
   fi
-  local app name size before=0 after_total=0 cat_freed=0 any=0
+  if (( SCAN_ONLY )); then
+    local total_inst=0 inst
+    for inst in "${installers[@]}"; do
+      [[ "$inst" == /Applications/Install\ macOS\ *.app ]] || continue
+      total_inst=$(( total_inst + $(du_safe "$inst") ))
+    done
+    if (( total_inst > 0 )); then
+      printf '  %-36s %s%10s%s\n' "macOS installers" "$C_YELLOW" "$(human_size "$total_inst")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + total_inst ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=macos_installers bytes=$total_inst"
+    fi
+    return 0
+  fi
+  section "Stale macOS installers"
+  printf '  /Applications/Install macOS *.app — 12-15 GB stub installers\n'
+  local app name size before=0 after_total=0 cat_freed=0 any=0 rc=0 one_rc
   for app in "${installers[@]}"; do
     # Paranoid re-check that the path matches the literal pattern
     [[ "$app" == /Applications/Install\ macOS\ *.app ]] || continue
@@ -2125,7 +2849,13 @@ category_macos_installers() {
     printf '  %s%s%s — %s%s%s\n' "$C_BOLD" "$name" "$C_RESET" \
       "$C_YELLOW" "$(human_size "$size")" "$C_RESET"
     if confirm "Delete \"$name\"?"; then
-      run_cmd "rm -rf /Applications/$name" zsh -c "rm -rf ${(q)app}"
+      one_rc=0
+      run_cmd "rm -rf /Applications/$name" zsh -c "rm -rf ${(q)app}" || one_rc=$?
+      if (( one_rc )); then
+        log ERROR "category=macos_installers app=\"$name\" rc=$one_rc"
+        rc=$one_rc
+        continue
+      fi
       local after_one=0
       [[ -e "$app" ]] && after_one=$(du_safe "$app")
       local one_freed=$(( size - after_one ))
@@ -2142,6 +2872,7 @@ category_macos_installers() {
     CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
     printf '  %s→ removed installers, freed %s%s\n' "$C_GREEN" "$(human_size "$cat_freed")" "$C_RESET"
   fi
+  return $rc
 }
 
 # ── version audit ────────────────────────────────────────
@@ -2163,7 +2894,7 @@ npm_latest() {
 
 check_tool_versions() {
   section "Tool versions"
-  local tool current latest cmp
+  local tool current latest cmp rc=0 up_rc
   for tool in npm yarn pnpm; do
     have "$tool" || { printf '  %-6s %s(not installed)%s\n' "$tool" "$C_DIM" "$C_RESET"; continue; }
     current="$("$tool" --version 2>/dev/null | head -1)"
@@ -2175,9 +2906,15 @@ check_tool_versions() {
     cmp="$(semver_cmp "$current" "$latest")"
     if [[ "$cmp" == "-1" ]]; then
       printf '  %-6s %s%s%s → latest %s%s%s\n' "$tool" "$C_YELLOW" "$current" "$C_RESET" "$C_GREEN" "$latest" "$C_RESET"
-      if confirm "Update $tool to $latest?"; then
-        run_cmd "npm i -g $tool@latest" npm i -g "$tool@latest"
-        log UPDATE "tool=$tool from=$current to=$latest"
+      if confirm_explicit "Update $tool to $latest?"; then
+        up_rc=0
+        run_cmd "npm i -g $tool@latest" npm i -g "$tool@latest" || up_rc=$?
+        if (( up_rc )); then
+          log ERROR "tool=$tool stage=update rc=$up_rc"
+          rc=$up_rc
+        else
+          log UPDATE "tool=$tool from=$current to=$latest"
+        fi
       else
         log DECLINE "tool=$tool stage=update current=$current latest=$latest"
       fi
@@ -2192,6 +2929,7 @@ check_tool_versions() {
     printf '  %-6s %s %s(report-only; upgrade via nvm/brew/installer)%s\n' "node" "$current" "$C_DIM" "$C_RESET"
     log INFO "tool=node current=$current"
   fi
+  return $rc
 }
 
 check_outdated_globals() {
@@ -2205,7 +2943,7 @@ check_outdated_globals() {
     return 0
   fi
   # --parseable format: path:pkg@wanted:pkg@current:pkg@latest:global
-  local line pkg current latest f3 f4
+  local line pkg current latest f3 f4 rc=0 up_rc
   while IFS= read -r line; do
     f3="$(echo "$line" | awk -F: '{print $3}')"
     f4="$(echo "$line" | awk -F: '{print $4}')"
@@ -2213,13 +2951,20 @@ check_outdated_globals() {
     current="${f3##*@}"
     latest="${f4##*@}"
     printf '  %-30s %s%s%s → %s%s%s\n' "$pkg" "$C_YELLOW" "$current" "$C_RESET" "$C_GREEN" "$latest" "$C_RESET"
-    if confirm "Update $pkg to $latest?"; then
-      run_cmd "npm i -g ${pkg}@latest" npm i -g "${pkg}@latest"
-      log UPDATE "pkg=$pkg from=$current to=$latest"
+    if confirm_explicit "Update $pkg to $latest?"; then
+      up_rc=0
+      run_cmd "npm i -g ${pkg}@latest" npm i -g "${pkg}@latest" || up_rc=$?
+      if (( up_rc )); then
+        log ERROR "pkg=$pkg stage=update rc=$up_rc"
+        rc=$up_rc
+      else
+        log UPDATE "pkg=$pkg from=$current to=$latest"
+      fi
     else
       log DECLINE "pkg=$pkg stage=update current=$current latest=$latest"
     fi
   done <<< "$out"
+  return $rc
 }
 
 # ── 2026-05-30 additions: Tier-1 caches + opt-in user-data/maintenance ──
@@ -2338,20 +3083,40 @@ category_font_cache() {
 # per-backup listing for informed consent, then a literal-DELETE confirm that
 # --yes does NOT bypass. rm target is the hardcoded MobileSync parent + /*.
 category_ios_backups() {
-  section "iOS device backups"
-  printf '  %sWARNING: these are full device backups, NOT a cache. Deletion is permanent%s\n' "$C_RED" "$C_RESET"
-  printf '  %sand cannot be undone unless you also back up to iCloud.%s\n' "$C_RED" "$C_RESET"
   local base="$HOME/Library/Application Support/MobileSync/Backup"
   local -a backups=("$base"/*(N/))
   if (( ${#backups} == 0 )); then
-    printf '  %snone present, skipping%s\n' "$C_DIM" "$C_RESET"
+    if (( ! SCAN_ONLY )); then
+      section "iOS device backups"
+      printf '  %sWARNING: these are full device backups, NOT a cache. Deletion is permanent%s\n' "$C_RED" "$C_RESET"
+      printf '  %sand cannot be undone unless you also back up to iCloud.%s\n' "$C_RED" "$C_RESET"
+      printf '  %snone present, skipping%s\n' "$C_DIM" "$C_RESET"
+    fi
     log SKIP "category=ios_backups reason=empty"
     return 0
   fi
-  local b name date size before=0
+  local b size before=0
   for b in "${backups[@]}"; do
     size="$(du_safe "$b")"
     before=$(( before + size ))
+  done
+
+  if (( SCAN_ONLY )); then
+    if (( before > 0 )); then
+      printf '  %-36s %s%10s%s\n' "iOS device backups" "$C_YELLOW" "$(human_size "$before")" "$C_RESET"
+      SCAN_TOTAL=$(( SCAN_TOTAL + before ))
+      SCAN_COUNT=$(( SCAN_COUNT + 1 ))
+      log SCAN "category=ios_backups bytes=$before"
+    fi
+    return 0
+  fi
+
+  section "iOS device backups"
+  printf '  %sWARNING: these are full device backups, NOT a cache. Deletion is permanent%s\n' "$C_RED" "$C_RESET"
+  printf '  %sand cannot be undone unless you also back up to iCloud.%s\n' "$C_RED" "$C_RESET"
+  local name date
+  for b in "${backups[@]}"; do
+    size="$(du_safe "$b")"
     name="$(/usr/libexec/PlistBuddy -c "Print :Device Name" "$b/Info.plist" 2>/dev/null)" || true
     [[ -z "$name" ]] && name="${b:t}"
     date="$(/usr/libexec/PlistBuddy -c "Print :Last Backup Date" "$b/Info.plist" 2>/dev/null)" || true
@@ -2368,8 +3133,8 @@ category_ios_backups() {
   fi
   # Second prompt: require the literal string DELETE even under --yes.
   printf '  %sType DELETE (all caps) to confirm permanent deletion:%s ' "$C_RED" "$C_RESET"
-  local confirm_text
-  read -r confirm_text
+  local confirm_text=""
+  read -r confirm_text || confirm_text=""
   if [[ "$confirm_text" != "DELETE" ]]; then
     printf '  aborted (did not type DELETE)\n'
     log DECLINE "category=ios_backups stage=double_prompt"
@@ -2377,7 +3142,7 @@ category_ios_backups() {
   fi
 
   run_cmd "rm -rf ~/Library/Application Support/MobileSync/Backup/*" \
-    zsh -c 'rm -rf "$HOME/Library/Application Support/MobileSync/Backup/"*' || {
+    zsh -c 'rm -rf "$HOME/Library/Application Support/MobileSync/Backup/"*(DN)' || {
       log ERROR "category=ios_backups rc=$?"
       return 0
     }
@@ -2400,33 +3165,47 @@ category_system_maintenance() {
   section "System maintenance (no disk reclaimed)"
   printf '  %sThese do not free disk space.%s purge frees inactive RAM; mdutil rebuilds\n' "$C_DIM" "$C_RESET"
   printf '  the Spotlight index. Both need sudo (you may be prompted for your password).\n'
-  if ! confirm "Run system maintenance (sudo)?"; then
+  if ! confirm_explicit "Run system maintenance (sudo)?"; then
     log DECLINE "category=system_maintenance"
     return 0
   fi
+  local rc=0 step_rc
   if have purge; then
-    run_cmd "sudo purge" sudo purge
-    log INFO "category=system_maintenance step=purge"
+    step_rc=0
+    run_cmd "sudo purge" sudo purge || step_rc=$?
+    if (( step_rc )); then
+      log ERROR "category=system_maintenance step=purge rc=$step_rc"
+      rc=$step_rc
+    else
+      log INFO "category=system_maintenance step=purge"
+    fi
   else
     log SKIP "category=system_maintenance step=purge reason=tool_not_installed"
   fi
   if have mdutil; then
-    run_cmd "sudo mdutil -E /" sudo mdutil -E /
-    log INFO "category=system_maintenance step=mdutil"
+    step_rc=0
+    run_cmd "sudo mdutil -E /" sudo mdutil -E / || step_rc=$?
+    if (( step_rc )); then
+      log ERROR "category=system_maintenance step=mdutil rc=$step_rc"
+      rc=$step_rc
+    else
+      log INFO "category=system_maintenance step=mdutil"
+    fi
   else
     log SKIP "category=system_maintenance step=mdutil reason=tool_not_installed"
   fi
+  (( rc == 0 )) || return $rc
   printf '  %s→ maintenance complete (no disk reclaimed)%s\n' "$C_GREEN" "$C_RESET"
 }
 
 main() {
-  log START "dry_run=$DRY_RUN yes=$ASSUME_YES prepare_pnpm=$PREPARE_PNPM"
+  log START "dry_run=$DRY_RUN yes=$ASSUME_YES prepare_pnpm=$PREPARE_PNPM scan=$SCAN_ONLY only=${ONLY_CATEGORIES:-none} skip=${SKIP_CATEGORIES:-none}"
 
   printf '%smac-cleaner%s — interactive macOS developer-cache cleaner   run %s\n' \
     "$C_BOLD" "$C_RESET" "$RUN_ID"
   printf '  %sHow it works:%s walks each cache, shows its size, asks y/N — %sy%s cleans, anything else skips.\n' \
     "$C_BOLD" "$C_RESET" "$C_GREEN" "$C_RESET"
-  printf '  %sFlags:%s --dry-run | --yes | --prepare-for-pnpm | --help\n' \
+  printf '  %sFlags:%s --scan | --only <cats> | --skip <cats> | --list | --dry-run | --yes | --prepare-for-pnpm | --help\n' \
     "$C_BOLD" "$C_RESET"
   printf '  %sLog:%s   %s\n' "$C_BOLD" "$C_RESET" "$LOG_FILE"
   printf '  %sAbort:%s Ctrl-C at any prompt. Xcode Archives & iOS backups have a second DELETE confirm.\n' \
@@ -2435,87 +3214,122 @@ main() {
     printf '  %s(dry-run: nothing will be deleted)%s\n' "$C_YELLOW" "$C_RESET"
   fi
   if (( ASSUME_YES )); then
-    printf '  %s(--yes: prompts auto-accepted; Xcode Archives & iOS backups still double-prompt)%s\n' "$C_YELLOW" "$C_RESET"
+    printf '  %s(--yes: prompts auto-accepted; Xcode Archives & iOS backups still double-prompt; sudo & npm upgrades still ask)%s\n' "$C_YELLOW" "$C_RESET"
   fi
   if (( PREPARE_PNPM )); then
     printf '  %s(--prepare-for-pnpm: only npm/yarn caches across all Node versions will be touched)%s\n' "$C_YELLOW" "$C_RESET"
   fi
+  if [[ -n "$ONLY_CATEGORIES" ]]; then
+    printf '  %s(--only: %s)%s\n' "$C_YELLOW" "$ONLY_CATEGORIES" "$C_RESET"
+  fi
+  if [[ -n "$SKIP_CATEGORIES" ]]; then
+    printf '  %s(--skip: %s)%s\n' "$C_YELLOW" "$SKIP_CATEGORIES" "$C_RESET"
+  fi
+
+  if (( SCAN_ONLY )); then
+    printf '  %s(scan mode: calculating reclaimable space, no changes will be made)%s\n\n' "$C_YELLOW" "$C_RESET"
+    printf '  %-36s %10s\n' "CATEGORY" "RECLAIMABLE"
+    printf '  %-36s %10s\n' "────────────────────────────────────" "───────────"
+  fi
 
   # Order: smaller/safer first → bigger dev-tool wins → version audit last.
-  category_npm_yarn_all_nvm
-  category_npm_yarn_all_brew
-  category_npm_cache
-  category_yarn_cache
-  if (( ! PREPARE_PNPM )); then
-    category_pnpm_store
-    category_brew
-    category_xcode_derived
-    category_xcode_archives
-    category_ios_sim
-    category_cocoapods
-    category_gradle
-    category_android_build
-    category_expo_metro
-    category_pip_cache
-    category_python_extras
-    category_node_extras
+  # Node / JavaScript
+  run_cat "npm_nvm" "node" category_npm_yarn_all_nvm
+  run_cat "npm_brew" "node" category_npm_yarn_all_brew
+  run_cat "npm" "node" category_npm_cache
+  run_cat "yarn" "node" category_yarn_cache
+  run_cat "pnpm" "node" category_pnpm_store
+  run_cat "bun" "node" category_bun_cache
+  run_cat "deno" "node" category_deno_cache
+  run_cat "node_extras" "node" category_node_extras
 
-    # Generic app caches, temp dirs, and dev dotfolder caches.
-    # These run after all tool-specific categories to avoid double-deletion.
-    category_app_caches
-    category_temp
-    category_dev_dotcaches
-    category_jetbrains_caches
+  # Python
+  run_cat "uv" "python" category_uv_cache
+  run_cat "pip" "python" category_pip_cache
+  run_cat "python_extras" "python" category_python_extras
 
-    # ── System Data categories (spec 2026-05-10) ──
-    # Familiar wins above; novel-judgment categories below.
-    category_coresimulator_caches
-    category_xctest_xcpg_devices
-    category_xcode_dt_cache
-    category_xcode_device_logs
-    category_xcode_previews
-    category_xcode_devicesupport
-    category_xcode_docs
-    category_instruments_cache
+  # Homebrew
+  run_cat "brew" "system" category_brew
 
-    category_swiftpm
-    category_clangd_index
-    category_ccache
-    category_sccache
-    category_cargo_registry
-    category_go_caches
-    category_composer
-    category_bazel
+  # Xcode & iOS
+  run_cat "deriveddata" "xcode" category_xcode_derived
+  run_cat "archives" "xcode" category_xcode_archives
+  run_cat "ios_sim" "xcode" category_ios_sim
+  run_cat "coresimulator" "xcode" category_coresimulator_caches
+  run_cat "coresimulator_logs" "xcode" category_coresimulator_logs
+  run_cat "xctest" "xcode" category_xctest_xcpg_devices
+  run_cat "xcode_dt" "xcode" category_xcode_dt_cache
+  run_cat "xcode_logs" "xcode" category_xcode_device_logs
+  run_cat "xcode_previews" "xcode" category_xcode_previews
+  run_cat "xcode_devicesupport" "xcode" category_xcode_devicesupport
+  run_cat "xcode_docs" "xcode" category_xcode_docs
+  run_cat "instruments" "xcode" category_instruments_cache
 
-    category_container_vms
-    category_browser_caches
+  # Mobile Dev
+  run_cat "cocoapods" "mobile" category_cocoapods
+  run_cat "gradle" "mobile" category_gradle
+  run_cat "android_build" "mobile" category_android_build
+  run_cat "android_studio_logs" "mobile" category_android_studio_logs
+  run_cat "expo_metro" "mobile" category_expo_metro
 
-    category_adobe_media_cache
-    category_desktop_app_caches
-    category_user_logs
-    category_quicklook_cache
-    category_font_cache
+  # Languages & Dev Tools
+  run_cat "swiftpm" "dev" category_swiftpm
+  run_cat "clangd" "dev" category_clangd_index
+  run_cat "ccache" "dev" category_ccache
+  run_cat "sccache" "dev" category_sccache
+  run_cat "cargo" "dev" category_cargo_registry
+  run_cat "go" "dev" category_go_caches
+  run_cat "composer" "dev" category_composer
+  run_cat "bazel" "dev" category_bazel
+  run_cat "jetbrains" "dev" category_jetbrains_caches
 
-    category_apple_music_stream_cache
-    category_mail_downloads
-    category_apple_maps_tiles
-    category_diagnostic_reports
-    category_android_studio_logs
-    category_intelligence_platform
-    category_wallpaper_aerials
+  # Containers & VMs
+  run_cat "containers" "containers" category_container_vms
 
-    category_macos_software_update
-    category_tm_local_snapshots
-    category_llm_caches
-    category_macos_installers
-    category_ios_backups
+  # Browsers & Web Apps
+  run_cat "browsers" "browsers" category_browser_caches
 
-    category_trash
+  # AI & LLM caches
+  run_cat "claude" "ai" category_claude_cache
+  run_cat "llm" "ai" category_llm_caches
 
-    check_tool_versions
-    check_outdated_globals
+  # Desktop Apps & Media
+  run_cat "adobe" "media,apps" category_adobe_media_cache
+  run_cat "desktop_apps" "apps" category_desktop_app_caches
 
-    category_system_maintenance
+  # Generic Caches, Logs, System Data & User Data
+  run_cat "app_caches" "system" category_app_caches
+  run_cat "temp" "system" category_temp
+  run_cat "dev_dotcaches" "system" category_dev_dotcaches
+  run_cat "user_logs" "system" category_user_logs
+  run_cat "quicklook" "system" category_quicklook_cache
+  run_cat "fonts" "system" category_font_cache
+  run_cat "music" "system" category_apple_music_stream_cache
+  run_cat "mail_downloads" "system" category_mail_downloads
+  run_cat "maps_tiles" "system" category_apple_maps_tiles
+  run_cat "diagnostic_reports" "system" category_diagnostic_reports
+  run_cat "intelligence_platform" "system" category_intelligence_platform
+  run_cat "wallpaper" "system" category_wallpaper_aerials
+  run_cat "software_update" "system" category_macos_software_update
+  run_cat "timemachine" "system" category_tm_local_snapshots
+  run_cat "macos_installers" "system" category_macos_installers
+  run_cat "ios_backups" "userdata" category_ios_backups
+  run_cat "trash" "system" category_trash
+
+  # Audit checks & system maintenance (skipped in scan-only mode)
+  if (( ! SCAN_ONLY )); then
+    run_cat "tool_versions" "audit" check_tool_versions
+    run_cat "npm_globals" "audit" check_outdated_globals
+    run_cat "system_maintenance" "system" category_system_maintenance
+  fi
+
+  if (( SCAN_ONLY )); then
+    printf '  %-36s %10s\n' "────────────────────────────────────" "───────────"
+    printf '  %-36s %s%10s%s\n' "Total Reclaimable" "$C_GREEN$C_BOLD" "$(human_size "$SCAN_TOTAL")" "$C_RESET"
+    printf '\n  Found reclaimable space in %d categories.\n' "$SCAN_COUNT"
+    printf '  Run without --scan to clean interactively, or use --only <key> / --skip <key>.\n'
+    log SCAN_END "reclaimable_total=$SCAN_TOTAL categories_found=$SCAN_COUNT"
+    return 0
   fi
 
   printf '\n%s── Summary ────────────────────%s\n' "$C_BOLD" "$C_RESET"

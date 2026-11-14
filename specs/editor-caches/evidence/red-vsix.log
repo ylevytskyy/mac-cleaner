@@ -1,0 +1,8 @@
+$ python3 specs/editor-caches/smoke.py vsix
+Traceback (most recent call last):
+  File "/Users/lion/Documents/Projects/mine/mac-cleaner-editor-caches/specs/editor-caches/smoke.py", line 47, in <module>
+    assert "CachedExtensionVSIXs" in preview, "Попередній перегляд не містить кешів VSIX"
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Попередній перегляд не містить кешів VSIX
+
+exit: 1
