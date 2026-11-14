@@ -354,6 +354,24 @@ run_cat() {
   return 0
 }
 
+# Failed cleanup: log ERROR, never CLEAN. Bytes that were actually freed before
+# the failure still count toward TOTAL_FREED (not CATEGORIES_CLEANED), so one
+# locked child does not erase a mostly-successful category from the summary.
+# Usage: report_failed_cleanup <log_cat> <rc> <freed_bytes>
+report_failed_cleanup() {
+  local logcat="$1" rc="$2" freed="$3"
+  (( freed < 0 )) && freed=0
+  if (( freed > 0 )); then
+    TOTAL_FREED=$(( TOTAL_FREED + freed ))
+    printf '  %sERROR%s cleanup returned rc=%d, partially freed %s (continuing)\n' \
+      "$C_RED" "$C_RESET" "$rc" "$(human_size "$freed")"
+    log ERROR "category=$logcat rc=$rc partial=true freed_bytes=$freed"
+  else
+    printf '  %sERROR%s cleanup returned rc=%d (continuing)\n' "$C_RED" "$C_RESET" "$rc"
+    log ERROR "category=$logcat rc=$rc"
+  fi
+}
+
 # category runner: handles the size-show / prompt / delete-and-measure loop.
 # Usage: run_category <name> <description> <path-for-sizing-or-"-"> <cleanup-fn>
 run_category() {
@@ -404,8 +422,8 @@ run_category() {
   fi
 
   if (( rc != 0 )); then
-    printf '  %sERROR%s cleanup returned rc=%d (continuing)\n' "$C_RED" "$C_RESET" "$rc"
-    log ERROR "category=$name rc=$rc"
+    # size_path "-" means nothing was measured: report no freed bytes.
+    report_failed_cleanup "$name" "$rc" $(( before - after ))
     return 0
   fi
 
@@ -457,13 +475,16 @@ run_paths_category() {
     rel="${p/#$HOME/~}"
     run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
-  # A failed rm is reported by run_cat (ERROR category=<key>), never as CLEAN.
-  (( rc == 0 )) || return $rc
   local after=0
   for p in "${paths[@]}"; do
     [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
   done
   local freed=$(( total - after ))
+  # A failed rm is ERROR (with any partial bytes), never CLEAN.
+  if (( rc != 0 )); then
+    report_failed_cleanup "$logcat" "$rc" "$freed"
+    return 0
+  fi
   (( freed < 0 )) && freed=0
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
@@ -1131,8 +1152,6 @@ category_app_caches() {
       zsh -c "rm -rf ${(q)child}" || rc=$?
   done
 
-  (( rc == 0 )) || return $rc
-
   # ── measure freed ─────────────────────────────────────────────────────
   local after=0
   for child in "$CACHES_DIR"/*(N/); do
@@ -1150,6 +1169,10 @@ category_app_caches() {
 
   local freed=$(( before - after ))
   (( freed < 0 )) && freed=0
+  if (( rc != 0 )); then
+    report_failed_cleanup app_caches "$rc" "$freed"
+    return 0
+  fi
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
   printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"

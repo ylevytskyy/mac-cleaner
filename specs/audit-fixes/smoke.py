@@ -232,12 +232,56 @@ def app_caches_owned(sb):
     expect(not hit, f"app_caches видаляє чужі кеші: {hit}", out)
 
 
+# ── Часткове видалення: ERROR, але звільнені байти враховано ─────────────
+
+def end_freed(log):
+    for line in log.splitlines():
+        if line.split()[1:2] == ["END"]:
+            return int(line.split("freed_total=")[1].split()[0])
+    return None
+
+
+def expect_partial(sb, rc, out, cat):
+    log = sb.log
+    expect(rc == 0, f"rc={rc}", out)
+    errs = [l for l in log.splitlines() if " ERROR " in l and f"category={cat}" in l]
+    expect(len(errs) == 1, f"очікувався рівно один ERROR для {cat}, є {len(errs)}", log)
+    expect("partial=true" in errs[0], "ERROR без partial=true", log)
+    freed = int(errs[0].split("freed_bytes=")[1].split()[0]) if "freed_bytes=" in errs[0] else 0
+    expect(freed >= 64 * 1024, f"freed_bytes={freed}, очікувалось >= 64K", log)
+    expect(not log_has(log, "CLEAN", f"category={cat}"), "часткове видалення залоговане як CLEAN", log)
+    expect((end_freed(log) or 0) >= freed, "freed_total у END не містить часткові байти", log)
+
+
+def partial_app_caches(sb):
+    caches = sb.home / "Library/Caches"
+    lock(caches / "com.example.locked/sub")
+    put(caches / "com.example.big/data", 256 * 1024)
+    rc, out = sb.run("--only", "app_caches", "--yes")
+    expect_partial(sb, rc, out, "app_caches")
+
+
+def partial_paths(sb):
+    lock(sb.home / "Library/Logs/locked")
+    put(sb.home / "Library/Logs/big.log", 256 * 1024)
+    rc, out = sb.run("--only", "user_logs", "--yes")
+    expect_partial(sb, rc, out, "user_logs")
+
+
+def partial_run_category(sb):
+    lock(sb.home / "Library/Developer/Xcode/DerivedData/locked")
+    put(sb.home / "Library/Developer/Xcode/DerivedData/Proj-abc/data", 256 * 1024)
+    rc, out = sb.run("--only", "deriveddata", "--yes")
+    expect_partial(sb, rc, out, "Xcode DerivedData")
+
+
 SCENARIOS = {f.__name__: f for f in (
     errexit_inline, errexit_browser,
     false_clean_paths, false_clean_brew, false_clean_bazel,
     pnpm_v3_dryrun, pnpm_v3_failed,
     trash_dotfile_only, trash_hidden_files, glob_no_match,
     app_caches_owned,
+    partial_app_caches, partial_paths, partial_run_category,
 )}
 
 
