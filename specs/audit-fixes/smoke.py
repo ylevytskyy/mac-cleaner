@@ -275,6 +275,50 @@ def partial_run_category(sb):
     expect_partial(sb, rc, out, "Xcode DerivedData")
 
 
+def partial_inline(sb):
+    lock(sb.home / ".npm/_logs/locked")
+    put(sb.home / "Library/Caches/node-gyp/big", 256 * 1024)
+    rc, out = sb.run("--only", "node_extras", "--yes")
+    expect_partial(sb, rc, out, "node_extras")
+
+
+# ── Рев'ю PR #1 ───────────────────────────────────────────────────────────
+
+def group_system_no_ios_backups(sb):
+    put(sb.home / "Library/Application Support/MobileSync/Backup/dev1/Manifest.db")
+    rc, out = sb.run("--only", "system", "--scan")
+    expect(rc == 0, f"rc={rc}", out)
+    expect("category=ios_backups" not in sb.log, "--only system зачепив ios_backups (userdata)", sb.log)
+
+
+# Імітація таблиці процесів: нативний Claude Code запускається через симлінк
+# ~/.local/bin/claude -> versions/<версія>, тож ім'я процесу (comm) — це
+# версія, а "claude" видно лише в argv.
+FAKE_PGREP = r"""
+comm='2.1.999'
+args='/Users/someone/.local/bin/claude --resume abc'
+mode=''; pat=''
+while [ $# -gt 0 ]; do
+  case "$1" in -x) mode=x ;; -f) mode=f ;; -*) ;; *) pat="$1" ;; esac
+  shift
+done
+case "$mode" in
+  x) [ "$comm" = "$pat" ] && exit 0 ;;
+  f) printf '%s\n' "$args" | grep -Eq -- "$pat" && exit 0 ;;
+esac
+exit 1"""
+
+
+def claude_versioned_binary(sb):
+    stub(sb.bin, "pgrep", FAKE_PGREP)
+    snap = put(sb.home / ".claude/shell-snapshots/snapshot-zsh.sh")
+    put(sb.home / ".claude/cache/x")
+    rc, out = sb.run("--only", "claude", "--yes")
+    expect(rc == 0, f"rc={rc}", out)
+    expect(snap.exists(), "shell-snapshots видалено, хоча Claude Code запущено", out)
+    expect(log_has(sb.log, "SKIP", "category=claude_cache", "reason=app_running"), "немає SKIP app_running", sb.log)
+
+
 SCENARIOS = {f.__name__: f for f in (
     errexit_inline, errexit_browser,
     false_clean_paths, false_clean_brew, false_clean_bazel,
@@ -282,6 +326,7 @@ SCENARIOS = {f.__name__: f for f in (
     trash_dotfile_only, trash_hidden_files, glob_no_match,
     app_caches_owned,
     partial_app_caches, partial_paths, partial_run_category,
+    partial_inline, group_system_no_ios_backups, claude_versioned_binary,
 )}
 
 

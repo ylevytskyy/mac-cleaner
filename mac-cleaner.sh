@@ -1357,7 +1357,6 @@ category_dev_dotcaches() {
     local rel="${p#$HOME/}"
     run_cmd "rm -rf ~/$rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
-  (( rc == 0 )) || return $rc
 
   local after=0
   for p in "${DEV_DOTCACHE_PATHS[@]}"; do
@@ -1366,6 +1365,10 @@ category_dev_dotcaches() {
 
   local freed=$(( before - after ))
   (( freed < 0 )) && freed=0
+  if (( rc != 0 )); then
+    report_failed_cleanup dev_dotcaches "$rc" "$freed"
+    return 0
+  fi
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
   printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
@@ -2488,12 +2491,15 @@ category_wallpaper_aerials() {
   local rc=0
   run_cmd "rm -rf <aerials>/videos" zsh -c "rm -rf ${(q)videos}" || rc=$?
   run_cmd "rm -rf <aerials>/thumbnails" zsh -c "rm -rf ${(q)thumbs}" || rc=$?
-  (( rc == 0 )) || return $rc
   local after=0
   [[ -e "$videos" ]] && after=$(( after + $(du_safe "$videos") ))
   [[ -e "$thumbs" ]] && after=$(( after + $(du_safe "$thumbs") ))
   local freed=$(( total - after ))
   (( freed < 0 )) && freed=0
+  if (( rc != 0 )); then
+    report_failed_cleanup wallpaper_aerials "$rc" "$freed"
+    return 0
+  fi
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
   printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
@@ -2629,13 +2635,16 @@ category_python_extras() {
     rel="${p/#$HOME/~}"
     run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
-  (( rc == 0 )) || return $rc
   local after=0
   for p in "${PATHS[@]}"; do
     [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
   done
   local freed=$(( total - after ))
   (( freed < 0 )) && freed=0
+  if (( rc != 0 )); then
+    report_failed_cleanup python_extras "$rc" "$freed"
+    return 0
+  fi
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
   printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
@@ -2678,13 +2687,16 @@ category_node_extras() {
     rel="${p/#$HOME/~}"
     run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
-  (( rc == 0 )) || return $rc
   local after=0
   for p in "${PATHS[@]}"; do
     [[ -e "$p" ]] && after=$(( after + $(du_safe "$p") ))
   done
   local freed=$(( total - after ))
   (( freed < 0 )) && freed=0
+  if (( rc != 0 )); then
+    report_failed_cleanup node_extras "$rc" "$freed"
+    return 0
+  fi
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
   printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
@@ -2698,7 +2710,11 @@ category_claude_cache() {
     "$HOME/.claude/debug"
   )
   # Live Claude Code sessions source ~/.claude/shell-snapshots on every Bash call.
-  if pgrep -x claude >/dev/null 2>&1; then
+  # The native install runs via ~/.local/bin/claude -> versions/<x.y.z>, so the
+  # process name is the version; match "claude" as a path component in argv
+  # too, plus the npm build (node .../claude-code/cli.js).
+  if pgrep -x claude >/dev/null 2>&1 ||
+     pgrep -f '(^|/)claude( |$)|claude-code/cli[.]js' >/dev/null 2>&1; then
     if (( ! SCAN_ONLY )); then
       printf '  %sWARNING:%s Claude Code is running; keeping ~/.claude/shell-snapshots (live sessions depend on it).\n' \
         "$C_YELLOW" "$C_RESET"
@@ -2779,7 +2795,6 @@ category_llm_caches() {
     rel="${p/#$HOME/~}"
     run_cmd "rm -rf $rel" zsh -c "rm -rf ${(q)p}" || rc=$?
   done
-  (( rc == 0 )) || return $rc
 
   local after=0
   for p in "${LLM_PATHS[@]}"; do
@@ -2787,6 +2802,10 @@ category_llm_caches() {
   done
   local freed=$(( total - after ))
   (( freed < 0 )) && freed=0
+  if (( rc != 0 )); then
+    report_failed_cleanup llm_caches "$rc" "$freed"
+    return 0
+  fi
   TOTAL_FREED=$(( TOTAL_FREED + freed ))
   CATEGORIES_CLEANED=$(( CATEGORIES_CLEANED + 1 ))
   printf '  %s→ cleaned, freed %s%s\n' "$C_GREEN" "$(human_size "$freed")" "$C_RESET"
@@ -3294,7 +3313,7 @@ main() {
   run_cat "software_update" "system" category_macos_software_update
   run_cat "timemachine" "system" category_tm_local_snapshots
   run_cat "macos_installers" "system" category_macos_installers
-  run_cat "ios_backups" "userdata,system" category_ios_backups
+  run_cat "ios_backups" "userdata" category_ios_backups
   run_cat "trash" "system" category_trash
 
   # Audit checks & system maintenance (skipped in scan-only mode)
